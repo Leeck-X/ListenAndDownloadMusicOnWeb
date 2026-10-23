@@ -52,6 +52,8 @@ function icon(name, size = 18) {
 const S = {
   meta: null, cfg: null, account: null,
   scope: 'search',                     // 查询模式：search（关键词）| link（歌单 / 单曲链接、ID）
+  listMode: 'search',                  // 列表来源：search（全网检索）| playlist（歌单）| liked（我喜欢的音乐）
+  baseSongs: [], listTitle: '', filterText: '',
   view: 'download',
   keyword: '', offset: 0, hasMore: false, loading: false, lastText: '',
   songs: [], picked: new Set(), liked: new Set(),
@@ -618,13 +620,19 @@ function paintScope(scope) {
   S.scope = scope;
   $$('#scope-group .scope-btn').forEach(btn =>
     btn.classList.toggle('active', btn.dataset.scope === scope));
-  $('#btn-query').textContent = scope === 'link' ? '加载' : '搜索';
+  $('#btn-query').textContent = scope === 'link' && S.listMode === 'search' ? '加载' : '搜索';
 }
 
-function setScopePlaceholder(scope) {
-  $('#query-input').placeholder = scope === 'link'
-    ? '粘贴歌单链接 / 歌单 ID / 单曲链接，回车加载'
-    : '搜索歌曲 / 歌手 / 专辑，或粘贴歌单链接、歌单 ID，回车搜索';
+function setScopePlaceholder(scope, inPlaylist = false) {
+  if (scope === 'link') {
+    $('#query-input').placeholder = inPlaylist
+      ? '在当前歌单内检索；粘贴歌单链接 / ID 可加载新歌单'
+      : '粘贴歌单链接 / 歌单 ID / 单曲链接，回车加载';
+  } else if (inPlaylist) {
+    $('#query-input').placeholder = '在当前歌单内检索；切到「搜索」模式可全网检索';
+  } else {
+    $('#query-input').placeholder = '搜索歌曲 / 歌手 / 专辑，或粘贴歌单链接、歌单 ID，回车搜索';
+  }
 }
 
 /* 人为点击模式按钮：切换后按新模式重新查询 */
@@ -642,14 +650,56 @@ function looksLikePlaylist(text) {
   return /^\d{5,}$/.test(text);
 }
 
+/* 名 / 歌手 / 专辑的本地关键词匹配（歌单内检索用） */
+function matchKeyword(song, keyword) {
+  const q = keyword.toLowerCase();
+  return [song.name, song.artists, song.album]
+    .some(value => (value || '').toLowerCase().includes(q));
+}
+
+/* 还原歌单 / 我喜欢：清空歌单内检索条件，展示完整列表 */
+function resetPlaylistFilter() {
+  S.filterText = '';
+  S.songs = S.baseSongs.slice();
+  setQueryMeta(`${S.listTitle} · ${S.songs.length} 首`);
+  setScopePlaceholder(S.scope, true);
+  renderSongs();
+  markPlayingRow();
+}
+
 async function runQuery(append = false, forced = false) {
   const text = $('#query-input').value.trim();
-  if (!text) { if (append) return; return toast('请输入搜索关键词、歌单链接或 ID', 'error'); }
+  // 显式切到「搜索」模式：退出歌单内检索，准备全网检索
+  if (forced && S.scope === 'search') {
+    S.listMode = 'search'; S.baseSongs = []; S.listTitle = ''; S.filterText = '';
+  }
+  // 歌单 / 我喜欢模式下（含「歌单」拨码），非链接文本默认限定在当前列表内检索
+  const playlistText = looksLikePlaylist(text);
+  const inPlaylist = !forced && S.listMode !== 'search'
+    && (S.scope === 'search' || !playlistText);
+  if (!text) {
+    if (append) return;
+    if (inPlaylist) return resetPlaylistFilter();
+    return toast('请输入搜索关键词、歌单链接或 ID', 'error');
+  }
+  if (inPlaylist) {
+    S.filterText = text;
+    S.songs = S.baseSongs.filter(song => matchKeyword(song, text));
+    S.keyword = ''; S.offset = 0; S.hasMore = false;
+    setQueryMeta(`${S.listTitle} 内检索「${text}」：${S.songs.length} / ${S.baseSongs.length} 首`);
+    setScopePlaceholder(S.scope === 'link' ? 'link' : 'search', true);
+    renderSongs();
+    markPlayingRow();
+    return;
+  }
   let asPlaylist;
   if (forced) {
     asPlaylist = S.scope === 'link';
+    if (asPlaylist && !playlistText) {
+      return toast('歌单模式请输入歌单链接或 ID，关键词检索请切到「搜索」模式', 'error');
+    }
   } else {
-    asPlaylist = looksLikePlaylist(text);   // 提交时自动识别并调整高亮
+    asPlaylist = playlistText;   // 提交时自动识别并调整高亮
     paintScope(asPlaylist ? 'link' : 'search');
   }
   if (append && (asPlaylist || !S.keyword)) return;
@@ -660,11 +710,15 @@ async function runQuery(append = false, forced = false) {
     if (asPlaylist) {
       const data = await api('/api/playlist', { text });
       S.songs = data.songs;
+      S.listMode = 'playlist'; S.baseSongs = data.songs;
+      S.listTitle = data.title || '歌单'; S.filterText = '';
       S.keyword = ''; S.offset = 0; S.hasMore = false;
       S.lastText = text;
-      if (!forced) setScopePlaceholder('link');
+      if (!forced) { paintScope('link'); setScopePlaceholder('link', true); }
+      else { setScopePlaceholder('link', true); }
       setQueryMeta(`${data.title} · ${data.songs.length} 首`);
     } else {
+      S.listMode = 'search'; S.baseSongs = []; S.listTitle = ''; S.filterText = '';
       if (!forced) setScopePlaceholder('search');
       const keyword = append ? S.keyword : text;
       S.keyword = keyword;
@@ -687,6 +741,14 @@ async function runQuery(append = false, forced = false) {
 
 /* 音源 / 音质变化后：保留关键词，自动重新拉取并覆盖旧结果 */
 async function replayQuery() {
+  // 我喜欢：按当前音源重新拉取；链接加载的歌单保留原链接重新加载
+  if (S.listMode === 'liked') { await loadLiked(); return; }
+  if (S.listMode === 'playlist' && !S.lastText) {
+    S.songs = S.baseSongs.slice();
+    renderSongs();
+    markPlayingRow();
+    return;
+  }
   if (!S.lastText) { renderSongBar(); return; }
   $('#query-input').value = S.lastText;
   S.offset = 0;
@@ -700,9 +762,13 @@ async function loadLiked() {
     const data = await api('/api/liked', { source: S.cfg.source }, 'GET');
     S.songs = data.songs;
     S.picked.clear();
+    S.listMode = 'liked'; S.baseSongs = data.songs;
+    S.listTitle = data.title || '我喜欢的音乐'; S.filterText = '';
     S.keyword = ''; S.offset = 0; S.hasMore = false; S.lastText = '';
     setQueryMeta(`${data.title} · ${data.songs.length} 首`);
     setLikedActive(true);
+    $('#btn-query').textContent = '搜索';
+    setScopePlaceholder('search', true);
     renderSongs();
     markPlayingRow();
   } catch (err) { toast(err.message, 'error'); setQueryMeta(); }
@@ -728,11 +794,13 @@ async function openMyPlaylists() {
         const data = await api('/api/playlist', { text: String(btn.dataset.id) });
         S.songs = data.songs;
         S.picked.clear();
+        S.listMode = 'playlist'; S.baseSongs = data.songs;
+        S.listTitle = data.title || '歌单'; S.filterText = '';
         S.keyword = ''; S.offset = 0; S.hasMore = false; S.lastText = '';
         setQueryMeta(`${data.title} · ${data.songs.length} 首`);
         setLikedActive(false);
         paintScope('link');            // 歌单属于链接 / ID 模式，拨码开关落到中间
-        setScopePlaceholder('link');
+        setScopePlaceholder('link', true);
         renderSongs();
         markPlayingRow();
       } catch (err) { toast(err.message, 'error'); setQueryMeta(); }
