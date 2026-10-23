@@ -77,6 +77,41 @@ python MusicDownloaderWeb.py
 
 启动后终端输出访问地址（默认 `http://127.0.0.1:8756`）与当前配置摘要，**不会自动打开浏览器**。桌面窗口展示服务状态与实时日志，关闭即最小化至系统托盘，托盘菜单可重新打开窗口 / 打开网页 / 退出。
 
+## Server 版（公网多用户部署）
+
+仓库同时提供面向公网的多用户服务端，代码位于 `server/`，与本地版仅共享音源与下载核心模块，配置、数据、部署方式完全独立。
+
+### 功能裁剪
+
+- 移除桌面窗口、系统托盘、关机 / 提示音 / 弹窗 / 打开目录等本地动作，服务纯后台常驻
+- 移除本地播放器与播放队列，聚焦「检索 → 勾选 → 下载 → 浏览器取回」闭环
+- 移除配置导入导出与本机路径设置；登录方式收敛为 **Cookie / 凭证导入**（不提供扫码）
+- 新增账号注册登录、每用户 Cookie 隔离、存储配额、文件过期清理、并发任务限制
+
+### 运行
+
+```bash
+pip install -r server/requirements.txt
+python server/app.py
+```
+
+默认监听 `0.0.0.0:8080`，首次启动自动生成 `server/server_config.json`（含随机会话密钥）并创建数据目录 `server/server_data`（SQLite 数据库 `app.db` + 各用户下载文件）。
+
+### 配置
+
+服务器级参数由 `server/server_config.json` 或环境变量控制：
+
+- `host` / `port`：监听地址与端口，也可用 `MD_SERVER_HOST` / `MD_SERVER_PORT`
+- `data_dir`：数据目录（`MD_SERVER_DATA_DIR`）
+- `quota_mb`：每用户存储配额，0 表示不限（`MD_SERVER_QUOTA_MB`）
+- `retention_hours`：成品文件保留时长，到期自动删除（`MD_SERVER_RETENTION_HOURS`）
+- `max_tasks_per_user` / `download_workers`：每用户并行任务数与单任务并发下载数
+- `weapi_keys` / `qq_credential`：由管理员统一配置的公共密钥，前端无读取与修改入口
+
+### 安全约定
+
+密码使用 PBKDF2-HMAC-SHA256（20 万轮）散列，会话令牌仅以摘要入库，Cookie 为 HttpOnly + SameSite=Lax；登录失败按 IP 与用户名限流；请求体有大小上限；文件下载校验归属并约束在用户目录内。公网部署应置于 HTTPS 反向代理之后，并将 `secure_cookie` 置为 `true`。
+
 ## 目录结构
 
 ```text
@@ -97,6 +132,15 @@ python MusicDownloaderWeb.py
 │   ├── index.html
 │   ├── app.css
 │   └── app.js
+├── server/                # 公网多用户服务端（独立入口与前端）
+│   ├── app.py             # 入口：监听端口、初始化数据库与清理线程
+│   ├── config.py          # 服务器级配置（server_config.json / 环境变量）
+│   ├── store.py           # SQLite：账号 / 会话 / 偏好 / 文件
+│   ├── accounts.py        # 密码散列、会话令牌、登录限流
+│   ├── context.py         # 每用户独立音源实例池
+│   ├── service.py         # 业务层（检索 / 下载任务 / 配额 / 过期清理）
+│   ├── routes.py          # HTTP 路由、鉴权与文件流式下载
+│   └── web/               # 精简前端（登录、检索、任务、文件）
 ├── config.json            # 配置与凭证（不入库，运行后自动生成）
 └── requirements.txt       # 依赖清单
 ```

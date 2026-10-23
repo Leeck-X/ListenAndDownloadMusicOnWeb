@@ -1,0 +1,174 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>音乐下载器 · Server 版</title>
+<link rel="stylesheet" href="app.css">
+</head>
+<body>
+<!-- 登录 / 注册 -->
+<section id="auth" class="auth hidden">
+  <div class="auth-card">
+    <h1>音乐下载器</h1>
+    <p class="auth-sub">公共下载服务 · 登录后检索并下载到你的空间</p>
+    <div class="tabs">
+      <button class="tab active" data-tab="login">登录</button>
+      <button class="tab" data-tab="register">注册</button>
+    </div>
+    <form id="auth-form" autocomplete="on">
+      <label>用户名
+        <input id="auth-user" name="username" type="text" maxlength="32"
+               placeholder="3~32 位字母、数字或 _ . -" autocomplete="username" required>
+      </label>
+      <label>密码
+        <input id="auth-pass" name="password" type="password" maxlength="128"
+               placeholder="至少 8 位" autocomplete="current-password" required>
+      </label>
+      <label id="auth-confirm-wrap" class="hidden">确认密码
+        <input id="auth-confirm" type="password" maxlength="128" placeholder="再次输入密码">
+      </label>
+      <button id="auth-submit" class="primary" type="submit">登录</button>
+      <p id="auth-error" class="form-error"></p>
+    </form>
+    <p class="auth-tip">下载文件在服务器暂存，到期自动清理，请及时保存。</p>
+  </div>
+</section>
+
+<!-- 主界面 -->
+<section id="app" class="hidden">
+  <header class="topbar">
+    <div class="brand">音乐下载器<span>Server</span></div>
+    <div class="top-actions">
+      <span id="user-name" class="user-name"></span>
+      <button id="btn-files" class="ghost">我的文件<span id="file-count" class="badge">0</span></button>
+      <button id="btn-settings" class="ghost">设置</button>
+      <button id="btn-logout" class="ghost">退出</button>
+    </div>
+  </header>
+
+  <main class="main">
+    <div class="panel toolbar">
+      <div class="row">
+        <div class="seg" id="source-seg"></div>
+        <div class="seg" id="mode-seg">
+          <button class="seg-btn active" data-mode="search">搜索</button>
+          <button class="seg-btn" data-mode="playlist">链接 / 歌单</button>
+          <button class="seg-btn" data-mode="liked">我喜欢</button>
+        </div>
+        <div class="search-box">
+          <input id="search-input" type="text" placeholder="输入歌名 / 歌手 / 歌单链接或 ID">
+          <button id="btn-search" class="primary">查询</button>
+        </div>
+      </div>
+      <div class="row row-sub">
+        <label class="check-all">
+          <input id="check-all" type="checkbox"> 全选
+        </label>
+        <span id="selected-count" class="muted">已选 0 首</span>
+        <div class="spacer"></div>
+        <label class="inline">音质
+          <select id="level-select"></select>
+        </label>
+        <button id="btn-download" class="primary">下载选中</button>
+      </div>
+    </div>
+
+    <div class="panel list-panel">
+      <div class="list-head">
+        <span id="list-title" class="list-title">搜索结果</span>
+        <span id="list-status" class="status-text"></span>
+      </div>
+      <div class="table-wrap" id="table-wrap">
+        <table>
+          <thead>
+            <tr>
+              <th class="col-check"></th>
+              <th class="col-index">#</th>
+              <th class="col-name">歌曲</th>
+              <th class="col-artist">歌手</th>
+              <th class="col-album">专辑</th>
+              <th class="col-dur">时长</th>
+              <th class="col-size">大小</th>
+            </tr>
+          </thead>
+          <tbody id="song-body"></tbody>
+        </table>
+        <div id="empty" class="empty">输入关键词开始搜索</div>
+      </div>
+    </div>
+
+    <div class="statusbar">
+      <div id="global-progress" class="global-progress"><i></i></div>
+      <span id="global-text" class="muted"></span>
+    </div>
+  </main>
+
+  <!-- 右侧抽屉：任务 / 文件 -->
+  <aside id="drawer" class="drawer hidden">
+    <div class="drawer-head">
+      <div class="tabs">
+        <button class="tab active" data-drawer="tasks">任务</button>
+        <button class="tab" data-drawer="files">我的文件</button>
+      </div>
+      <button id="drawer-close" class="ghost">关闭</button>
+    </div>
+    <div id="drawer-tasks" class="drawer-body"></div>
+    <div id="drawer-files" class="drawer-body hidden"></div>
+  </aside>
+
+  <!-- 设置 -->
+  <div id="settings-mask" class="mask hidden">
+    <div class="modal">
+      <div class="modal-head">
+        <strong>设置</strong>
+        <button id="settings-close" class="ghost">关闭</button>
+      </div>
+      <div class="modal-body">
+        <h3>下载偏好</h3>
+        <div class="field-grid">
+          <label class="inline">默认音源
+            <select id="pref-source"></select>
+          </label>
+          <label class="inline">默认音质
+            <select id="pref-level"></select>
+          </label>
+        </div>
+        <div class="field-grid">
+          <label class="check"><input id="pref-lyric" type="checkbox"> 保存歌词 (.lrc)</label>
+          <label class="check"><input id="pref-tag" type="checkbox"> 写入歌曲标签</label>
+          <label class="check"><input id="pref-cover" type="checkbox"> 嵌入封面</label>
+          <label class="check"><input id="pref-embed-lyric" type="checkbox"> 嵌入歌词</label>
+        </div>
+
+        <h3>账号登录</h3>
+        <p class="muted small">粘贴浏览器 Cookie 以获取会员音质 / 我的歌单；不登录也可下载免费歌曲。</p>
+        <div class="source-block">
+          <div class="source-head">
+            <strong>网易云音乐</strong>
+            <span id="state-netease" class="state">未登录</span>
+            <button class="ghost small" data-logout="netease">退出</button>
+          </div>
+          <textarea id="cookie-netease" rows="3" placeholder="MUSIC_U=...; __csrf=..."></textarea>
+          <button class="primary small" data-login="netease">保存并登录</button>
+        </div>
+        <div class="source-block">
+          <div class="source-head">
+            <strong>QQ 音乐</strong>
+            <span id="state-qq" class="state">未登录</span>
+            <button class="ghost small" data-logout="qq">退出</button>
+          </div>
+          <textarea id="cookie-qq" rows="3" placeholder="uin=...; qm_keyst=..."></textarea>
+          <button class="primary small" data-login="qq">保存并登录</button>
+        </div>
+        <p class="muted small">凭据仅保存在本服务的账号空间中，不会展示给其他用户。</p>
+      </div>
+    </div>
+  </div>
+
+  <div id="toast" class="toast hidden"></div>
+</section>
+
+<script src="app.js"></script>
+</body>
+</html>
