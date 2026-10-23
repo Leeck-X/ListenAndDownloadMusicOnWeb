@@ -169,7 +169,7 @@ ROUTES = {
 
 
 class ApiHandler(BaseHTTPRequestHandler):
-    server_version = 'MusicDownloaderWeb/1.0'
+    server_version = 'MusicDownloaderWeb/1.0.3'
     protocol_version = 'HTTP/1.1'
 
     # ---- 响应工具 ----
