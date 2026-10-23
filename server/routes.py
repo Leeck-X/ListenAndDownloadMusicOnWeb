@@ -265,20 +265,29 @@ class Handler(BaseHTTPRequestHandler):
             task_match = TASK_RE.match(path)
             file_match = FILE_RE.match(path)
             if path == '/api/auth/me' and method == 'GET':
+                if not service.enable_users:
+                    guest = service.guest_user()
+                    self._ok({'user': {'id': guest['id'], 'username': guest['username']},
+                              'auth_enabled': False})
+                    return
                 user = service.user_by_token(self._token())
                 if not user:
                     self._fail('请先登录', 401)
                 else:
-                    self._ok({'user': {'id': user['id'], 'username': user['username']}})
+                    self._ok({'user': {'id': user['id'], 'username': user['username']},
+                              'auth_enabled': True})
                 return
             if handler is None and not task_match and not file_match:
                 self._fail(f'未知接口：{path}', 404)
                 return
 
-            user = service.user_by_token(self._token())
-            if not user:
-                self._fail('请先登录', 401)
-                return
+            if service.enable_users:
+                user = service.user_by_token(self._token())
+                if not user:
+                    self._fail('请先登录', 401)
+                    return
+            else:
+                user = service.guest_user()
 
             ctx = Ctx(service, user, self._token(), self._ip())
 

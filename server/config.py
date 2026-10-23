@@ -20,6 +20,8 @@ DEFAULT_CONFIG = {
     'data_dir': os.path.join(BASE_DIR, 'server_data'),
     # 会话有效期（小时）
     'session_hours': 168,
+    # 是否启用账号系统：关闭后无需登录，所有人共用访客空间
+    'enable_users': True,
     # 每用户存储配额（MB）与文件保留时长（小时）
     'quota_mb': 2048,
     'retention_hours': 72,
@@ -39,9 +41,22 @@ _ENV_MAP = {
     'MD_SERVER_HOST': ('host', str),
     'MD_SERVER_PORT': ('port', int),
     'MD_SERVER_DATA_DIR': ('data_dir', str),
+    'MD_SERVER_ENABLE_USERS': ('enable_users', 'bool'),
     'MD_SERVER_QUOTA_MB': ('quota_mb', int),
     'MD_SERVER_RETENTION_HOURS': ('retention_hours', int),
 }
+
+
+def _as_bool(value, default: bool = True) -> bool:
+    if isinstance(value, bool):
+        return value
+    if isinstance(value, str):
+        text = value.strip().lower()
+        if text in ('1', 'true', 'yes', 'on', '启用'):
+            return True
+        if text in ('0', 'false', 'no', 'off', '关闭', '禁用'):
+            return False
+    return default
 
 
 def _apply_env(cfg: dict) -> None:
@@ -50,17 +65,18 @@ def _apply_env(cfg: dict) -> None:
         if raw is None or raw == '':
             continue
         try:
-            cfg[key] = cast(raw)
+            cfg[key] = _as_bool(raw) if cast == 'bool' else cast(raw)
         except (TypeError, ValueError):
             pass
 
 
 def _sanitize(cfg: dict) -> dict:
     try:
-        cfg['port'] = int(cfg.get('port') or 8080)
+        cfg['port'] = int(cfg.get('port') or DEFAULT_CONFIG['port'])
     except (TypeError, ValueError):
-        cfg['port'] = 8080
+        cfg['port'] = DEFAULT_CONFIG['port']
     cfg['port'] = max(0, min(65535, cfg['port']))
+    cfg['enable_users'] = _as_bool(cfg.get('enable_users'), True)
     cfg['quota_mb'] = max(0, int(cfg.get('quota_mb') or 0))
     cfg['retention_hours'] = max(1, int(cfg.get('retention_hours') or 72))
     cfg['session_hours'] = max(1, int(cfg.get('session_hours') or 168))

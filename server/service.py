@@ -25,6 +25,8 @@ from models import LEVELS_BY_SOURCE, Song, encode_for_level, human_size
 
 SOURCES = [('netease', '网易云音乐'), ('qq', 'QQ 音乐')]
 SOURCE_LABELS = dict(SOURCES)
+GUEST_ID = 0
+GUEST_USER = {'id': GUEST_ID, 'username': '访客', 'disabled': 0}
 
 DEFAULT_PREFS = {
     'source': 'netease',
@@ -184,6 +186,7 @@ class ServerService:
     def __init__(self, cfg: dict, store):
         self.cfg = cfg
         self.store = store
+        self.enable_users = bool(cfg.get('enable_users', True))
         self.contexts = ContextPool(store, cfg)
         self.limiter = LoginLimiter()
         self._lock = threading.RLock()   # _trim_tasks 在持锁上下文内被调用，需可重入
@@ -202,7 +205,13 @@ class ServerService:
         print(f'[{time.strftime("%H:%M:%S")}] [{level}] {message}', flush=True)
 
     # ---------------- 账号 ----------------
+    def guest_user(self) -> dict:
+        """未启用账号系统时的公共身份，任务与文件统一挂在 user_id=0 下。"""
+        return dict(GUEST_USER)
+
     def register(self, username: str, password: str, ip: str) -> dict:
+        if not self.enable_users:
+            raise AccountError('本服务未启用账号系统')
         username = validate_username(username)
         password = validate_password(password)
         if self.store.find_user(username):
@@ -212,6 +221,8 @@ class ServerService:
         return self._issue_session(user_id, ip)
 
     def login(self, username: str, password: str, ip: str) -> dict:
+        if not self.enable_users:
+            raise AccountError('本服务未启用账号系统')
         username = (username or '').strip()
         self.limiter.check(ip, username)
         user = self.store.find_user(username)
@@ -329,8 +340,11 @@ class ServerService:
     def meta(self, user_id: int) -> dict:
         usage = self.store.user_usage(user_id)
         quota = self._quota
+        username = '访客' if not self.enable_users else \
+            (self.store.get_user(user_id) or {}).get('username', '')
         return {
-            'user': (self.store.get_user(user_id) or {}).get('username', ''),
+            'user': username,
+            'auth_enabled': self.enable_users,
             'sources': [{'value': value, 'label': label} for value, label in SOURCES],
             'levels': {value: [{'value': v, 'label': lab} for v, lab in levels]
                        for value, levels in LEVELS_BY_SOURCE.items()},

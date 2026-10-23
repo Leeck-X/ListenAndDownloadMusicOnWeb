@@ -16,7 +16,7 @@ import time
 
 ITERATIONS = 200_000
 USERNAME_RE = re.compile(r'^[A-Za-z0-9_.-]{3,32}$')
-MIN_PASSWORD = 8
+MIN_PASSWORD = 4
 MAX_PASSWORD = 128
 
 

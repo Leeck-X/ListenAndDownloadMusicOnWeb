@@ -330,6 +330,12 @@ td.col-check input, td input[type="checkbox"] { width: auto; }
 ::-webkit-scrollbar-thumb { background: #2b3443; border-radius: 8px; }
 ::-webkit-scrollbar-track { background: transparent; }
 
+/* 未启用账号系统：隐藏所有账号相关入口 */
+body.auth-off #user-name,
+body.auth-off #btn-logout,
+body.auth-off #account-section,
+body.auth-off #mode-seg [data-mode="liked"] { display: none !important; }
+
 @media (max-width: 860px) {
   .main { padding: 12px 12px 0; }
   .col-album { display: none; }

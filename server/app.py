@@ -34,6 +34,7 @@ def main() -> int:
     print(f' 监听地址 : {address}')
     print(f' 数据目录 : {cfg["data_dir"]}')
     print(f' 配置文件 : {CONFIG_PATH}')
+    print(f' 账号系统 : {"已启用" if cfg["enable_users"] else "已关闭（共用访客空间）"}')
     print(f' 存储配额 : {quota}')
     print(f' 文件保留 : {cfg["retention_hours"]} 小时')
     print(f' 单用户任务上限 : {cfg["max_tasks_per_user"]}')

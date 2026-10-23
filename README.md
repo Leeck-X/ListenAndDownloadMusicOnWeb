@@ -103,6 +103,7 @@ python server/app.py
 
 - `host` / `port`：监听地址与端口，也可用 `MD_SERVER_HOST` / `MD_SERVER_PORT`
 - `data_dir`：数据目录（`MD_SERVER_DATA_DIR`）
+- `enable_users`：是否启用账号系统，默认 `true`；置为 `false` 后无需登录，所有人共用访客空间，前端隐藏登录 / 注册 / 退出 / 账号登录与「我喜欢」入口（`MD_SERVER_ENABLE_USERS`）
 - `quota_mb`：每用户存储配额，0 表示不限（`MD_SERVER_QUOTA_MB`）
 - `retention_hours`：成品文件保留时长，到期自动删除（`MD_SERVER_RETENTION_HOURS`）
 - `max_tasks_per_user` / `download_workers`：每用户并行任务数与单任务并发下载数
@@ -110,7 +111,7 @@ python server/app.py
 
 ### 安全约定
 
-密码使用 PBKDF2-HMAC-SHA256（20 万轮）散列，会话令牌仅以摘要入库，Cookie 为 HttpOnly + SameSite=Lax；登录失败按 IP 与用户名限流；请求体有大小上限；文件下载校验归属并约束在用户目录内。公网部署应置于 HTTPS 反向代理之后，并将 `secure_cookie` 置为 `true`。
+密码使用 PBKDF2-HMAC-SHA256（20 万轮）散列，长度要求 4~128 位；会话令牌仅以摘要入库，Cookie 为 HttpOnly + SameSite=Lax；登录失败按 IP 与用户名限流；请求体有大小上限；文件下载校验归属并约束在用户目录内。公网部署应置于 HTTPS 反向代理之后，并将 `secure_cookie` 置为 `true`。
 
 ## 目录结构
 

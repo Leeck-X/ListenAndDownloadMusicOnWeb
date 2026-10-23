@@ -21,6 +21,7 @@ const state = {
   pollTimer: null,
   finishedTaskIds: new Set(),
   authMode: 'login',
+  authEnabled: true,
   drawerTab: 'tasks',
 };
 
@@ -77,7 +78,7 @@ async function api(path, payload, method) {
     throw new Error('网络异常，请稍后重试');
   }
   if (res.status === 401) {
-    showAuth();
+    if (state.authEnabled) showAuth();
     throw new Error('登录已过期，请重新登录');
   }
   let data;
@@ -145,13 +146,23 @@ $('auth-form').addEventListener('submit', async (event) => {
 });
 
 /* ---------------- 初始化 ---------------- */
+function applyAuthUI() {
+  document.body.classList.toggle('auth-off', !state.authEnabled);
+  if (!state.authEnabled && state.mode === 'liked') {
+    switchMode('search');
+  }
+}
+
 async function bootstrap() {
   try {
     const data = await api('/api/auth/me');
     state.user = data.user;
+    state.authEnabled = data.auth_enabled !== false;
+    applyAuthUI();
     await enterApp();
   } catch (err) {
-    showAuth();
+    if (state.authEnabled) showAuth();
+    else toast(err.message, true);
   }
 }
 
@@ -161,7 +172,7 @@ async function enterApp() {
     await loadMeta();
   } catch (err) {
     toast(err.message, true);
-    showAuth();
+    if (state.authEnabled) showAuth();
     return;
   }
   startPolling();
@@ -173,6 +184,8 @@ async function loadMeta() {
   state.meta = meta;
   state.prefs = meta.prefs;
   state.source = meta.prefs.source;
+  state.authEnabled = meta.auth_enabled !== false;
+  applyAuthUI();
   $('user-name').textContent = meta.user || '';
   renderSources();
   renderLevels();
@@ -502,7 +515,7 @@ async function pollTick() {
   } catch (err) {
     /* 轮询失败静默重试 */
   }
-  if (!state.user) return;
+  if (!state.user && state.authEnabled) return;
   const running = state.tasks.some((task) => task.status === 'queued' || task.status === 'running');
   state.pollTimer = setTimeout(pollTick, running ? 1200 : 4000);
 }
@@ -740,7 +753,7 @@ $('settings-mask').addEventListener('click', (event) => {
 async function openSettings() {
   $('settings-mask').classList.remove('hidden');
   syncPrefsControls();
-  refreshAccountStates();
+  if (state.authEnabled) refreshAccountStates();
 }
 
 async function refreshAccountStates() {
