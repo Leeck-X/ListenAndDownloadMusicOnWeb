@@ -141,7 +141,7 @@ python server/app.py
 │   ├── context.py         # 每用户独立音源实例池
 │   ├── service.py         # 业务层（检索 / 下载任务 / 配额 / 过期清理）
 │   ├── routes.py          # HTTP 路由、鉴权与文件流式下载
-│   └── web/               # 精简前端（登录、检索、任务、文件）
+│   └── web/               # 前端（沿用桌面版界面：登录、检索、任务、文件）
 ├── config.json            # 配置与凭证（不入库，运行后自动生成）
 └── requirements.txt       # 依赖清单
 ```
