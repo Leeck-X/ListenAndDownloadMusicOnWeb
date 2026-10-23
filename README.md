@@ -1,4 +1,4 @@
-# MusicDownloaderUi
+# ListenAndDownloadMusicOnWeb
 
 网易云音乐 / QQ 音乐 歌曲下载器，Python 实现，本地 Web 界面：
 
