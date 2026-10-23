@@ -77,13 +77,11 @@
 
 ```text
 MusicDownloader/
-├─ Web_Tk/        Web 版完整可运行副本：MusicDownloaderWeb.py + 共享模块 + web/ + config.json
-├─ web/           Web 版前端静态文件（HTML / CSS / JS）
+├─ MusicDownloaderWeb.py   Web 版入口（本地服务 + 桌面窗口）
+├─ web/                    Web 版前端静态文件（HTML / CSS / JS）
 ├─ api.py / providers.py / downloader.py / cfgstore.py …  共享核心模块
-└─ config.json    本机配置（含登录凭证，已被 .gitignore 忽略）
+└─ config.json             本机配置（含登录凭证，已被 .gitignore 忽略）
 ```
-
-`Web_Tk/` 带有完整的共享模块与 `config.json`，可单独拷贝出去运行；仓库根目录则是开发版本的共用模块。
 
 ## 安装与运行
 
@@ -91,10 +89,9 @@ MusicDownloader/
 pip install -r requirements.txt
 ```
 
-**Web 版（推荐）**
+**Web 版**
 
 ```bash
-cd Web_Tk
 python MusicDownloaderWeb.py
 ```
 
