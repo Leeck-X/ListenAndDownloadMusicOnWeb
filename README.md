@@ -95,7 +95,7 @@ pip install -r server/requirements.txt
 python server/app.py
 ```
 
-默认监听 `0.0.0.0:8080`，首次启动自动生成 `server/server_config.json`（含随机会话密钥）并创建数据目录 `server/server_data`（SQLite 数据库 `app.db` + 各用户下载文件）。
+默认监听 `0.0.0.0:3434`，首次启动自动生成 `server/server_config.json` 并创建数据目录 `server/server_data`（SQLite 数据库 `app.db` + 各用户下载文件）。
 
 ### 配置
 

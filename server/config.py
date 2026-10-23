@@ -15,7 +15,7 @@ CONFIG_PATH = os.path.join(BASE_DIR, 'server_config.json')
 DEFAULT_CONFIG = {
     # 监听地址：公网部署用 0.0.0.0，反代后置时可改回 127.0.0.1
     'host': '0.0.0.0',
-    'port': 8080,
+    'port': 3434,
     # 数据目录：数据库 + 各用户的下载文件
     'data_dir': os.path.join(BASE_DIR, 'server_data'),
     # 会话有效期（小时）
