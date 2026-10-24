@@ -377,7 +377,7 @@ class ServerService:
             api.set_cookie('')
             self.store.save_prefs(user_id, cookie='')
             ctx.update(cookie='')
-        return {'logged_in': False, 'nickname': ''}
+        return {'logged_in': False, 'nickname': '', 'avatar': ''}
 
     # ---------------- 扫码登录 ----------------
     def qr_start(self, user_id: int, source: str, login_type: str = 'qq') -> dict:

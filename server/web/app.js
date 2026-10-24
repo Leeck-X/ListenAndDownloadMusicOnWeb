@@ -52,7 +52,7 @@ function icon(name, size) {
 
 const state = {
   user: null, meta: null, prefs: null, authEnabled: true, authMode: 'login',
-  scope: 'search', source: 'netease', view: 'download',
+  scope: 'search', source: 'netease', view: 'download', account: null,
   songs: [], title: '', selected: new Set(), keyword: '',
   offset: 0, hasMore: false, loading: false,
   queue: [], playIndex: -1, playing: false, playMode: 'order',
@@ -182,6 +182,40 @@ function updateCloudNote() {
     : '当前以访客身份使用：音源登录凭据保存在访客空间，换浏览器或清理 Cookie 后可能失效；登录账号后可保存到你的账号下。';
 }
 
+/* 音源账号：顶栏头像、未播放时的默认封面都取自这里（与桌面版一致） */
+function avatarUrl() {
+  return (state.account && state.account.avatar) || '';
+}
+
+function sourceLabel(source) {
+  const hit = ((state.meta && state.meta.sources) || []).find((item) => item.value === source);
+  return hit ? hit.label : (source === 'qq' ? 'QQ 音乐' : '网易云音乐');
+}
+
+function paintSourceAvatar() {
+  const btn = $('btn-source');
+  if (!btn) return;
+  const account = state.account || {};
+  const label = sourceLabel(state.source);
+  if (account.logged_in && account.avatar) {
+    btn.innerHTML = `<img class="src-avatar" src="${esc(account.avatar)}" alt="">`;
+    btn.title = `${label} · ${account.nickname || '已登录'}`;
+  } else {
+    btn.innerHTML = `<span class="icon-slot">${icon('user', 18)}</span>`;
+    btn.title = account.logged_in
+      ? `${label} · ${account.nickname || '已登录'}` : '音源登录（扫码）';
+  }
+}
+
+async function refreshAccount() {
+  try {
+    const data = await api('/api/account', { source: state.source });
+    state.account = data;
+    paintSourceAvatar();
+    syncPlayerTexts();
+  } catch (err) { /* 账号校验失败不阻塞界面 */ }
+}
+
 async function bootstrap() {
   paintIcons();
   initVolume();
@@ -222,6 +256,7 @@ async function loadMeta() {
   syncPrefs();
   renderQuota();
   updateListStatus();
+  refreshAccount();
 }
 
 /* ==================== 偏好 / 音源 / 音质 ==================== */
@@ -276,6 +311,7 @@ async function savePrefs(patch) {
     state.source = data.prefs.source;
     syncPrefs();
     updateListStatus();
+    if (patch && patch.source) refreshAccount();
     return data.prefs;
   } catch (err) {
     toast(err.message, 'error');
@@ -866,6 +902,9 @@ async function loginSource(source, button) {
     $(`cookie-${source}`).value = '';
     toast(data.logged_in ? '登录成功' : '已保存凭据', 'ok');
     refreshAccountStates();
+    state.account = data;
+    paintSourceAvatar();
+    syncPlayerTexts();
   } catch (err) {
     toast(err.message, 'error');
   } finally {
@@ -1009,6 +1048,33 @@ function paintModeButton() {
   btn.title = download ? '切换到播放器模式' : '切换到下载模式';
 }
 
+function setCover(node, song) {
+  if (!node) return;
+  const src = (song && song.cover) || avatarUrl();
+  if (src) {
+    node.src = src;
+    node.style.visibility = 'visible';
+  } else {
+    node.removeAttribute('src');
+    node.style.visibility = 'hidden';
+  }
+}
+
+/* 查询栏右侧的封面按钮：有当前曲目时显示，点击打开播放器窗口 */
+function paintCoverButton(song) {
+  const btn = $('btn-cover');
+  const img = $('btn-cover-img');
+  if (!btn || !img) return;
+  const src = (song && song.cover) || avatarUrl();
+  if (src) {
+    img.src = src;
+    btn.hidden = false;
+  } else {
+    img.removeAttribute('src');
+    btn.hidden = true;
+  }
+}
+
 function syncPlayerTexts() {
   const song = currentSong();
   eachId(PLAYER_NAMES, (node) => {
@@ -1022,15 +1088,8 @@ function syncPlayerTexts() {
       node.textContent = song ? `${song.artists} · ${song.album}` : '';
     }
   });
-  eachId(PLAYER_COVERS, (node) => {
-    if (song && song.cover) {
-      node.src = song.cover;
-      node.style.visibility = 'visible';
-    } else {
-      node.removeAttribute('src');
-      node.style.visibility = 'hidden';
-    }
-  });
+  eachId(PLAYER_COVERS, (node) => setCover(node, song));
+  paintCoverButton(song);
 }
 
 function setPlayHint(text) {
@@ -1308,6 +1367,7 @@ async function openQrLogin(source, onDone) {
         close();
         refreshAccountStates();
         if (typeof onDone === 'function') onDone();
+        refreshAccount();
       } else if (result.event === 'timeout' || result.event === 'refuse') {
         stopQrPoll();
       }
@@ -1373,6 +1433,7 @@ function bind() {
     filterTimer = setTimeout(renderSongs, 180);
   });
   $('btn-my-playlists').addEventListener('click', openMyPlaylists);
+  $('btn-cover').addEventListener('click', () => openPlayerWindow());
 
   /* 列表 */
   $('song-list').addEventListener('click', (event) => {
@@ -1559,6 +1620,7 @@ function bind() {
         await api('/api/account/logout', { source });
         toast('已退出该音源', 'ok');
         refreshAccountStates();
+        refreshAccount();
       } catch (err) {
         toast(err.message, 'error');
       }

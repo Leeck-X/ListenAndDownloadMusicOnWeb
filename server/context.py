@@ -69,11 +69,13 @@ class UserContext:
         try:
             info = api.account()
         except Exception as exc:  # noqa: BLE001 - 网络异常按未登录处理
-            return {'logged_in': False, 'nickname': '', 'error': str(exc)}
+            return {'logged_in': False, 'nickname': '', 'avatar': '', 'error': str(exc)}
         if not info:
-            return {'logged_in': False, 'nickname': ''}
+            return {'logged_in': False, 'nickname': '', 'avatar': '', 'vipType': 0}
         return {'logged_in': True, 'nickname': info.get('nickname') or '',
-                'userId': info.get('userId') or ''}
+                'userId': info.get('userId') or '',
+                'vipType': info.get('vipType') or 0,
+                'avatar': info.get('avatarUrl') or ''}
 
     def close(self) -> None:
         with self._lock:
