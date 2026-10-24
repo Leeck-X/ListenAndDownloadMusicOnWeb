@@ -7,6 +7,8 @@
 """
 from __future__ import annotations
 
+import base64
+import io
 import os
 import re
 import secrets
@@ -90,6 +92,19 @@ def song_from_dict(data: dict) -> Song:
         mid=data.get('mid') or '',
         media_mid=data.get('media_mid') or '',
     )
+
+
+def _qr_png_data_url(text: str) -> str:
+    """把二维码内容渲染成 PNG data URL；渲染失败时返回空串由前端回退。"""
+    try:
+        import qrcode
+
+        image = qrcode.make(text)
+        buffer = io.BytesIO()
+        image.save(buffer, format='PNG')
+        return 'data:image/png;base64,' + base64.b64encode(buffer.getvalue()).decode('ascii')
+    except Exception:  # noqa: BLE001 - 缺依赖时前端改用 JS 渲染
+        return ''
 
 
 def parse_playlist_id(text: str, source: str) -> str:
@@ -335,6 +350,70 @@ class ServerService:
             self.store.save_prefs(user_id, cookie='')
             ctx.update(cookie='')
         return {'logged_in': False, 'nickname': ''}
+
+    # ---------------- 扫码登录 ----------------
+    def qr_start(self, user_id: int, source: str, login_type: str = 'qq') -> dict:
+        source = 'qq' if source == 'qq' else 'netease'
+        ctx = self.contexts.get(user_id)
+        api = ctx.provider(source)
+        if source == 'qq':
+            png, identifier = api.qr_login_start(login_type or 'qq')
+            return {'kind': 'image', 'identifier': identifier,
+                    'image': 'data:image/png;base64,' + base64.b64encode(png).decode('ascii')}
+        unikey = api.qrcode_unikey()
+        if not unikey:
+            raise ServiceError('获取二维码失败，请稍后重试')
+        url = f'https://music.163.com/login?codekey={unikey}'
+        return {'kind': 'url', 'identifier': unikey, 'url': url,
+                'image': _qr_png_data_url(url)}
+
+    def qr_poll(self, user_id: int, source: str, identifier: str) -> dict:
+        source = 'qq' if source == 'qq' else 'netease'
+        ctx = self.contexts.get(user_id)
+        api = ctx.provider(source)
+        if source == 'qq':
+            event, note = api.qr_login_poll()
+            result = {'event': event, 'message': note}
+            if event == 'done':
+                credential = api.credential_dict()
+                self.store.save_prefs(user_id, qq_credential=credential)
+                ctx.update(qq_credential=credential)
+                self.log('info', f'用户 {user_id} QQ 音乐扫码登录成功')
+                result['account'] = self.account_state(user_id, 'qq')
+            return result
+        result = api.qrcode_check(identifier or '')
+        code = result.get('code')
+        state = {800: 'timeout', 801: 'waiting', 802: 'confirm', 803: 'done'}.get(code, 'other')
+        message = {800: '二维码已过期，请重新获取', 801: '等待扫码',
+                   802: '已扫码，请在手机上确认', 803: '登录成功'}.get(code, '等待扫码')
+        payload = {'event': state, 'message': message}
+        if state == 'done':
+            cookie = result.get('cookie') or api.cookie_str()
+            self.store.save_prefs(user_id, cookie=cookie)
+            ctx.update(cookie=cookie)
+            self.log('info', f'用户 {user_id} 网易云扫码登录成功')
+            payload['account'] = self.account_state(user_id, 'netease')
+        return payload
+
+    # ---------------- 播放 ----------------
+    def play(self, user_id: int, payload: dict) -> dict:
+        song = song_from_dict(payload.get('song') or payload)
+        level = payload.get('level') or self.prefs(user_id)['level']
+        encode = encode_for_level(song.source, level)
+        try:
+            info = self.contexts.get(user_id).provider(song.source).song_url(song, level, encode)
+        except Exception as exc:  # noqa: BLE001 - 外部接口异常统一提示
+            raise ServiceError(f'获取播放地址失败：{exc}')
+        return {'url': info.get('url'), 'type': (info.get('type') or '').lower(),
+                'size': info.get('size') or 0, 'level': level, 'encode': encode}
+
+    def lyric(self, user_id: int, payload: dict) -> dict:
+        song = song_from_dict(payload.get('song') or payload)
+        try:
+            data = self.contexts.get(user_id).provider(song.source).lyric(song)
+        except Exception as exc:  # noqa: BLE001 - 外部接口异常统一提示
+            raise ServiceError(f'获取歌词失败：{exc}')
+        return {'lyric': data.get('lyric') or '', 'trans': data.get('trans') or ''}
 
     # ---------------- 曲库 ----------------
     def meta(self, user_id: int) -> dict:

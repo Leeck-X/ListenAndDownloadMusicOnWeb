@@ -10,6 +10,7 @@
 <div id="app">
   <header class="topbar">
     <div class="brand">音乐下载器 <span class="tag">Server</span></div>
+    <button id="btn-mode" class="mode-btn" title="切换到播放器模式"></button>
     <div class="spacer"></div>
     <div class="account auth-only">
       <span id="account-text" class="muted small">未登录</span>
@@ -25,7 +26,7 @@
     </div>
   </header>
 
-  <section class="view">
+  <section id="download-view" class="view">
     <div class="query-bar">
       <div class="scope-group" id="scope-group">
         <button class="scope-btn active" data-scope="search" title="按关键词搜索"><span class="icon-slot"></span></button>
@@ -43,10 +44,41 @@
       <span class="sep muted" hidden>·</span>
       <span id="list-count" class="muted small"></span>
       <button id="btn-pick-all" class="ghost tiny" hidden>全选</button>
+      <button id="btn-play-all" class="ghost tiny" hidden>全部播放</button>
       <button id="btn-download-sel" class="primary tiny" hidden>下载选中</button>
     </div>
     <div class="table-wrap" id="song-area">
       <div id="song-list" class="song-list empty">暂无内容，试试搜索或粘贴歌单链接</div>
+    </div>
+  </section>
+
+  <!-- 播放器模式：封面信息 + 歌词 -->
+  <section id="play-view" class="view" hidden>
+    <div class="player">
+      <div class="player-left">
+        <img id="pl-cover" class="pl-cover" alt="">
+        <h2 id="pl-name">未在播放</h2>
+        <p class="muted" id="pl-artist">双击列表中的歌曲即可播放</p>
+        <div class="pl-progress">
+          <span id="pl-cur" class="mono">00:00</span>
+          <input id="pl-seek" type="range" min="0" max="1000" value="0" step="1">
+          <span id="pl-dur" class="mono">00:00</span>
+        </div>
+        <div class="pl-ctl">
+          <button id="pl-prev" class="icon-btn" title="上一首"></button>
+          <button id="pl-toggle" class="icon-btn play" title="播放 / 暂停"></button>
+          <button id="pl-next" class="icon-btn" title="下一首"></button>
+          <button id="pl-mode" class="ghost tiny" title="播放模式">顺序播放</button>
+        </div>
+        <div class="pl-vol">
+          <button id="pl-mute" class="icon-btn small" title="静音 / 恢复"></button>
+          <input id="pl-volume" type="range" min="0" max="100" value="100" step="1">
+        </div>
+        <div id="pl-hint" class="muted small"></div>
+      </div>
+      <div class="player-right">
+        <div id="pl-lyric" class="lyric-box is-empty">（暂无歌词）</div>
+      </div>
     </div>
   </section>
 
@@ -140,6 +172,7 @@
           <div class="source-head">
             <strong>登录状态</strong>
             <span id="state-netease" class="state">未登录</span>
+            <button class="ghost tiny" data-qr="netease">扫码登录</button>
             <button class="ghost tiny" data-logout="netease">退出</button>
           </div>
           <textarea id="cookie-netease" rows="3" placeholder="MUSIC_U=...; __csrf=..."></textarea>
@@ -150,6 +183,7 @@
           <div class="source-head">
             <strong>登录状态</strong>
             <span id="state-qq" class="state">未登录</span>
+            <button class="ghost tiny" data-qr="qq">扫码登录</button>
             <button class="ghost tiny" data-logout="qq">退出</button>
           </div>
           <textarea id="cookie-qq" rows="3" placeholder="uin=...; qm_keyst=..."></textarea>
@@ -163,6 +197,7 @@
   </div>
 </div>
 
+<audio id="audio" preload="metadata"></audio>
 <div id="modal-root"></div>
 <div id="toast-root"></div>
 

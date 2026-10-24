@@ -62,6 +62,24 @@ def h_logout_source(ctx, payload):
     return ctx.service.logout_source(ctx.user_id, payload.get('source'))
 
 
+def h_qr_start(ctx, payload):
+    return ctx.service.qr_start(ctx.user_id, payload.get('source'),
+                                payload.get('type') or 'qq')
+
+
+def h_qr_poll(ctx, payload):
+    return ctx.service.qr_poll(ctx.user_id, payload.get('source'),
+                               payload.get('identifier') or '')
+
+
+def h_play(ctx, payload):
+    return ctx.service.play(ctx.user_id, payload or {})
+
+
+def h_lyric(ctx, payload):
+    return ctx.service.lyric(ctx.user_id, payload or {})
+
+
 def h_search(ctx, payload):
     return ctx.service.search(ctx.user_id, payload.get('keyword'),
                               payload.get('limit') or 50, payload.get('offset') or 0,
@@ -107,6 +125,10 @@ ROUTES = {
     ('POST', '/api/account'): h_account,
     ('POST', '/api/account/login'): h_login_cookie,
     ('POST', '/api/account/logout'): h_logout_source,
+    ('POST', '/api/login/qr/start'): h_qr_start,
+    ('POST', '/api/login/qr/poll'): h_qr_poll,
+    ('POST', '/api/play'): h_play,
+    ('POST', '/api/lyric'): h_lyric,
     ('POST', '/api/search'): h_search,
     ('POST', '/api/playlist'): h_playlist,
     ('POST', '/api/my_playlists'): h_my_playlists,

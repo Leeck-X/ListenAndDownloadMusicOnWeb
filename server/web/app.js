@@ -20,25 +20,41 @@ const SVG_PATHS = {
   gear: '<circle cx="12" cy="12" r="3.2"/><path d="M12 3v2.6M12 18.4V21M3 12h2.6M18.4 12H21M5.6 5.6l1.9 1.9M16.5 16.5l1.9 1.9M18.4 5.6l-1.9 1.9M7.5 16.5l-1.9 1.9"/>',
   download: '<path d="M12 4v11"/><path d="M8 11.5l4 4 4-4"/><path d="M5 19.5h14"/>',
   close: '<path d="M6 6l12 12M18 6L6 18"/>',
+  music: '<path d="M9.5 17.5V6.2l9-1.7v11.3"/><circle cx="6.8" cy="17.8" r="2.7"/><circle cx="15.8" cy="16" r="2.7"/>',
+  repeat: '<path d="M5 8.5h11.5"/><path d="M14.5 6l3 2.5-3 2.5"/><path d="M19 15.5H7.5"/><path d="M9.5 13l-3 2.5 3 2.5"/>',
+  one: '<path d="M5 8.5h11.5"/><path d="M14.5 6l3 2.5-3 2.5"/><path d="M19 15.5H7.5"/><path d="M9.5 13l-3 2.5 3 2.5"/><path d="M12 12.4v3.2"/>',
+  shuffle: '<path d="M4 7h3.2l7.6 10H19"/><path d="M16.5 4.2L19 7l-2.5 2.8"/><path d="M4 17h3.2l2.6-3.4"/><path d="M13 8.6l1.8-1.6H19"/><path d="M16.5 14.2L19 17l-2.5 2.8"/>',
+  volume: '<path d="M4.5 9.2h3l4-3v11.6l-4-3h-3Z"/><path d="M15 9.4a4 4 0 0 1 0 5.2"/>',
+  mute: '<path d="M4.5 9.2h3l4-3v11.6l-4-3h-3Z"/><path d="M15 9.6l4.4 4.8M19.4 9.6L15 14.4"/>',
+  prev: '<path d="M7 5.5v13M18.5 6.6v10.8L10 12z"/>',
+  next: '<path d="M17 5.5v13M5.5 6.6v10.8L14 12z"/>',
+  play: '<path d="M8 5.2v13.6L19 12z"/>',
+  pause: '<path d="M8 5.4h3v13.2H8zM13 5.4h3v13.2h-3z"/>',
 };
+const FILLED_ICONS = new Set(['play', 'pause', 'prev', 'next']);
 const ICON_IDS = {
   'btn-download': 'download', 'btn-tasks': 'tasks',
   'btn-files': 'folder', 'btn-settings': 'gear',
+  'pl-prev': 'prev', 'pl-next': 'next',
 };
 const SCOPE_ICONS = { search: 'search', link: 'list', liked: 'heart' };
 
 function icon(name, size) {
   const body = SVG_PATHS[name] || '';
-  return `<svg viewBox="0 0 24 24" width="${size || 18}" height="${size || 18}" fill="none"
-    stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"
+  const paint = FILLED_ICONS.has(name)
+    ? 'fill="currentColor" stroke="none"'
+    : 'fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"';
+  return `<svg viewBox="0 0 24 24" width="${size || 18}" height="${size || 18}" ${paint}
     aria-hidden="true">${body}</svg>`;
 }
 
 const state = {
   user: null, meta: null, prefs: null, authEnabled: true, authMode: 'login',
-  scope: 'search', source: 'netease',
+  scope: 'search', source: 'netease', view: 'download',
   songs: [], title: '', selected: new Set(), keyword: '',
   offset: 0, hasMore: false, loading: false,
+  queue: [], playIndex: -1, playing: false, playMode: 'order',
+  lyric: [], lyricKey: '',
   tasks: [], files: [], expanded: new Set(),
   pollTimer: null, finishedIds: new Set(),
 };
@@ -122,6 +138,10 @@ function paintIcons() {
   [['tasks-close', 16], ['files-close', 16]].forEach(([id, size]) => {
     if ($(id)) $(id).innerHTML = icon('close', size);
   });
+  paintModeButton();
+  paintPlayButton();
+  paintModeButtonPlay();
+  paintMuteButton();
 }
 
 /* ==================== 登录 / 注册 ==================== */
@@ -152,6 +172,7 @@ function applyAuthUI() {
 
 async function bootstrap() {
   paintIcons();
+  initVolume();
   bind();
   try {
     const data = await api('/api/auth/me');
@@ -426,6 +447,7 @@ function renderSongs() {
     container.classList.remove('empty');
     container.innerHTML = songRows(songs);
   }
+  markPlayingRow();
   syncListBar();
 }
 
@@ -435,6 +457,7 @@ function syncListBar() {
   const picked = songs.filter((song) => state.selected.has(song.key)).length;
   $('list-count').textContent = has ? `共 ${songs.length} 首` : '';
   $('btn-pick-all').hidden = !has;
+  $('btn-play-all').hidden = !has;
   $('btn-download-sel').hidden = !has;
   $('list-pick').textContent = picked ? `已选 ${picked} 首` : '';
   $('list-pick').hidden = !picked;
@@ -827,6 +850,315 @@ async function openMyPlaylists() {
   }
 }
 
+/* ==================== 播放器 ==================== */
+const audio = $('audio');
+const LYRIC_BOXES = ['#pl-lyric'];
+
+function currentSong() {
+  return state.playIndex >= 0 ? state.queue[state.playIndex] : null;
+}
+
+function setView(view) {
+  state.view = view;
+  $('download-view').hidden = view !== 'download';
+  $('play-view').hidden = view !== 'play';
+  paintModeButton();
+}
+
+function paintModeButton() {
+  const btn = $('btn-mode');
+  if (!btn) return;
+  const download = state.view === 'download';
+  btn.innerHTML = icon(download ? 'download' : 'music', 16)
+    + `<span>${download ? '下载模式' : '播放器模式'}</span>`;
+  btn.title = download ? '切换到播放器模式' : '切换到下载模式';
+}
+
+function syncPlayerTexts() {
+  const song = currentSong();
+  $('pl-name').textContent = song ? song.name : '未在播放';
+  $('pl-artist').textContent = song ? `${song.artists} · ${song.album}` : '双击列表中的歌曲即可播放';
+  const cover = $('pl-cover');
+  if (song && song.cover) {
+    cover.src = song.cover;
+    cover.style.visibility = 'visible';
+  } else {
+    cover.removeAttribute('src');
+    cover.style.visibility = 'hidden';
+  }
+}
+
+function setPlayHint(text) {
+  $('pl-hint').textContent = text || '';
+}
+
+function markPlayingRow() {
+  const song = currentSong();
+  const key = song ? song.key : '';
+  $$('#song-list tr[data-key]').forEach((tr) => {
+    tr.classList.toggle('playing', tr.dataset.key === key);
+  });
+}
+
+function levelLabelOf(source, level) {
+  const hit = levelsOf(source).find((item) => item.value === level);
+  return hit ? hit.label : level;
+}
+
+/* 播放当前列表第 index 首：向服务端换取直链，由浏览器直接播放（不占服务器带宽） */
+async function playIndex(index) {
+  if (!state.queue.length) { toast('播放列表为空', 'error'); return; }
+  if (index < 0) index = state.queue.length - 1;
+  if (index >= state.queue.length) index = 0;
+  state.playIndex = index;
+  const song = state.queue[index];
+  state.lyric = [];
+  state.lyricKey = '';
+  resetLyric();
+  syncPlayerTexts();
+  setPlayHint('正在取址…');
+  markPlayingRow();
+  try {
+    const data = await api('/api/play', { song, level: (state.prefs || {}).level });
+    audio.src = data.url;
+    await audio.play().catch(() => { throw new Error('浏览器阻止了自动播放，请点播放键'); });
+    state.playing = true;
+    paintPlayButton();
+    const kind = (data.type || data.encode || '').toUpperCase();
+    setPlayHint(`${kind} · ${levelLabelOf(song.source, data.level)}`);
+    loadLyric(song);
+  } catch (err) {
+    state.playing = false;
+    paintPlayButton();
+    setPlayHint('');
+    toast('播放失败：' + err.message, 'error');
+  }
+}
+
+function togglePlay() {
+  if (!audio.src) { toast('还没有选择歌曲', 'error'); return; }
+  if (audio.paused) audio.play().catch(() => {}); else audio.pause();
+}
+
+function paintPlayButton() {
+  const playing = state.playing && !audio.paused;
+  const btn = $('pl-toggle');
+  if (!btn) return;
+  btn.innerHTML = icon(playing ? 'pause' : 'play', 22);
+  btn.title = playing ? '暂停' : '播放';
+}
+
+function stepSong(delta) {
+  if (!state.queue.length) return;
+  if (state.playMode === 'shuffle') {
+    playIndex(Math.floor(Math.random() * state.queue.length));
+    return;
+  }
+  playIndex(state.playIndex + delta);
+}
+
+function cycleMode() {
+  state.playMode = { order: 'shuffle', shuffle: 'single', single: 'order' }[state.playMode] || 'order';
+  paintModeButtonPlay();
+}
+
+function paintModeButtonPlay() {
+  const modes = {
+    order: { icon: 'repeat', label: '顺序播放' },
+    single: { icon: 'one', label: '单曲循环' },
+    shuffle: { icon: 'shuffle', label: '随机播放' },
+  };
+  const mode = modes[state.playMode] || modes.order;
+  const btn = $('pl-mode');
+  if (!btn) return;
+  btn.innerHTML = icon(mode.icon, 16) + `<span>${mode.label}</span>`;
+  btn.title = `播放模式：${mode.label}（点击切换）`;
+}
+
+function setVolume(value) {
+  const volume = Math.max(0, Math.min(100, Number(value) || 0));
+  audio.volume = volume / 100;
+  const slider = $('pl-volume');
+  if (slider && Number(slider.value) !== volume) slider.value = String(volume);
+  paintMuteButton();
+  try { localStorage.setItem('nmd.volume', String(volume)); } catch (err) { /* 忽略 */ }
+}
+
+function paintMuteButton() {
+  const btn = $('pl-mute');
+  if (btn) btn.innerHTML = icon(audio.volume === 0 ? 'mute' : 'volume', 16);
+}
+
+function initVolume() {
+  let volume = 100;
+  try {
+    const saved = localStorage.getItem('nmd.volume');
+    if (saved !== null && isFinite(Number(saved))) volume = Number(saved);
+  } catch (err) { /* 忽略 */ }
+  setVolume(volume);
+}
+
+function fmtTime(seconds) {
+  if (!isFinite(seconds) || seconds < 0) return '00:00';
+  const total = Math.floor(seconds);
+  return `${String(Math.floor(total / 60)).padStart(2, '0')}:${String(total % 60).padStart(2, '0')}`;
+}
+
+function parseLrc(text) {
+  const lines = [];
+  const re = /\[(\d{1,2}):(\d{1,2})(?:[.:](\d{1,3}))?\]/g;
+  (text || '').split('\n').forEach((raw) => {
+    const times = [];
+    let match;
+    re.lastIndex = 0;
+    while ((match = re.exec(raw))) {
+      times.push(Number(match[1]) * 60 + Number(match[2])
+        + (match[3] ? Number(match[3]) / Math.pow(10, match[3].length) : 0));
+    }
+    const content = raw.replace(re, '').trim();
+    if (!content || !times.length) return;
+    times.forEach((t) => lines.push({ t, text: content }));
+  });
+  lines.sort((a, b) => a.t - b.t);
+  return lines;
+}
+
+let lastLyricIndex = -1;
+
+function resetLyric(text) {
+  lastLyricIndex = -1;
+  LYRIC_BOXES.forEach((sel) => {
+    const box = $(sel);
+    if (!box) return;
+    box.classList.add('is-empty');
+    box.textContent = text || '（暂无歌词）';
+  });
+}
+
+async function loadLyric(song) {
+  if (state.lyricKey === song.key) return;
+  state.lyricKey = song.key;
+  try {
+    const data = await api('/api/lyric', { song });
+    const lines = parseLrc(data.lyric);
+    state.lyric = lines;
+    if (!lines.length) { resetLyric(data.lyric ? '（纯文本歌词）' : '（无歌词）'); return; }
+    const html = lines.map((line) => `<div class="lyric-line">${esc(line.text)}</div>`).join('');
+    LYRIC_BOXES.forEach((sel) => {
+      const box = $(sel);
+      if (!box) return;
+      box.classList.remove('is-empty');
+      box.innerHTML = html;
+    });
+    lastLyricIndex = -1;
+    syncLyric(audio.currentTime, true);
+  } catch (err) {
+    state.lyric = [];
+    resetLyric('歌词获取失败');
+  }
+}
+
+function syncLyric(time, force) {
+  if (!state.lyric.length) return;
+  let index = -1;
+  for (let i = 0; i < state.lyric.length; i += 1) {
+    if (state.lyric[i].t <= time + 0.2) index = i; else break;
+  }
+  if (index === lastLyricIndex && !force) return;
+  lastLyricIndex = index;
+  LYRIC_BOXES.forEach((sel) => {
+    const box = $(sel);
+    if (!box) return;
+    const nodes = $$('.lyric-line', box);
+    nodes.forEach((node, i) => node.classList.toggle('on', i === index));
+    const node = nodes[index];
+    if (!node) return;
+    const top = node.getBoundingClientRect().top - box.getBoundingClientRect().top + box.scrollTop;
+    box.scrollTop = Math.max(0, top - box.clientHeight / 2 + node.offsetHeight / 2);
+  });
+}
+
+/* 全部播放：把当前可见列表整批作为播放队列，从第一首开始 */
+async function playAll() {
+  const songs = visibleSongs();
+  if (!songs.length) { toast('当前列表没有歌曲', 'error'); return; }
+  state.queue = songs.slice();
+  await playIndex(0);
+}
+
+/* 双击列表某行：以当前可见列表为队列，从该行开始播放 */
+function playSongByKey(key) {
+  const songs = visibleSongs();
+  const index = songs.findIndex((song) => song.key === key);
+  if (index < 0) return;
+  state.queue = songs.slice();
+  playIndex(index);
+}
+
+/* ==================== 扫码登录 ==================== */
+let qrTimer = null;
+
+function stopQrPoll() {
+  if (qrTimer) { clearInterval(qrTimer); qrTimer = null; }
+}
+
+async function openQrLogin(source) {
+  stopQrPoll();
+  const label = source === 'qq' ? 'QQ 音乐' : '网易云音乐';
+  const mask = document.createElement('div');
+  mask.className = 'modal-mask';
+  mask.innerHTML = `<div class="modal" style="min-width:min(340px,92vw)">
+    <h3>${label}扫码登录</h3>
+    <div class="qr-box"><img id="qr-img" alt="二维码">
+      <span id="qr-hint" class="muted">正在获取二维码…</span>
+      <a id="qr-url" class="muted small" target="_blank" rel="noopener" hidden></a></div>
+    <div class="modal-foot"><button class="ghost" data-close>关闭</button></div>
+  </div>`;
+  document.body.appendChild(mask);
+  const close = () => { stopQrPoll(); mask.remove(); };
+  mask.addEventListener('click', (event) => {
+    if (event.target === mask || event.target.closest('[data-close]')) close();
+  });
+
+  let data;
+  try {
+    data = await api('/api/login/qr/start', { source, type: 'qq' });
+  } catch (err) {
+    close();
+    toast(err.message, 'error');
+    return;
+  }
+
+  const img = mask.querySelector('#qr-img');
+  const hint = mask.querySelector('#qr-hint');
+  const link = mask.querySelector('#qr-url');
+  if (data.image) img.src = data.image; else img.hidden = true;
+  if (data.kind === 'url' && data.url) {
+    link.href = data.url;
+    link.textContent = '打开登录页';
+    link.hidden = false;
+  }
+  hint.textContent = '请用手机扫码';
+
+  qrTimer = setInterval(async () => {
+    try {
+      const result = await api('/api/login/qr/poll', { source, identifier: data.identifier });
+      hint.textContent = result.message || '等待扫码…';
+      if (result.event === 'done') {
+        stopQrPoll();
+        toast('登录成功', 'ok');
+        close();
+        refreshAccountStates();
+      } else if (result.event === 'timeout' || result.event === 'refuse') {
+        stopQrPoll();
+      }
+    } catch (err) {
+      stopQrPoll();
+      hint.textContent = err.message;
+    }
+  }, 2000);
+}
+
 /* ==================== 事件绑定 ==================== */
 function bind() {
   /* 登录 */
@@ -898,6 +1230,11 @@ function bind() {
   });
   $('btn-pick-all').addEventListener('click', togglePickAll);
   $('btn-download-sel').addEventListener('click', () => submitDownload());
+  $('btn-play-all').addEventListener('click', playAll);
+  $('song-list').addEventListener('dblclick', (event) => {
+    const row = event.target.closest('tr[data-key]');
+    if (row) playSongByKey(row.dataset.key);
+  });
 
   /* 滚动加载 */
   $('song-area').addEventListener('scroll', (event) => {
@@ -917,7 +1254,45 @@ function bind() {
   $('btn-tasks').addEventListener('click', toggleTasks);
   $('btn-files').addEventListener('click', openFiles);
   $('btn-settings').addEventListener('click', openSettings);
+  $('btn-mode').addEventListener('click', () => setView(state.view === 'download' ? 'play' : 'download'));
   document.addEventListener('click', () => closeMenu());
+
+  /* 播放器 */
+  $('pl-toggle').addEventListener('click', togglePlay);
+  $('pl-prev').addEventListener('click', () => stepSong(-1));
+  $('pl-next').addEventListener('click', () => stepSong(1));
+  $('pl-mode').addEventListener('click', cycleMode);
+  $('pl-mute').addEventListener('click', () => setVolume(audio.volume > 0 ? 0 : 60));
+  $('pl-volume').addEventListener('input', (event) => setVolume(event.target.value));
+  $('pl-seek').addEventListener('input', (event) => {
+    if (audio.duration) audio.currentTime = (Number(event.target.value) / 1000) * audio.duration;
+  });
+  audio.addEventListener('play', () => { state.playing = true; paintPlayButton(); });
+  audio.addEventListener('pause', () => { state.playing = false; paintPlayButton(); });
+  audio.addEventListener('timeupdate', () => {
+    const current = audio.currentTime || 0;
+    const duration = audio.duration || 0;
+    $('pl-cur').textContent = fmtTime(current);
+    $('pl-seek').value = duration ? String(Math.round((current / duration) * 1000)) : '0';
+    syncLyric(current);
+  });
+  audio.addEventListener('loadedmetadata', () => {
+    $('pl-dur').textContent = fmtTime(audio.duration);
+  });
+  audio.addEventListener('ended', () => {
+    if (state.playMode === 'single') {
+      audio.currentTime = 0;
+      audio.play().catch(() => {});
+      return;
+    }
+    stepSong(1);
+  });
+  audio.addEventListener('error', () => {
+    if (!audio.src) return;
+    setPlayHint('播放出错，可尝试降低音质后重试');
+    state.playing = false;
+    paintPlayButton();
+  });
 
   /* 任务窗口 */
   $('tasks-close').addEventListener('click', () => { $('tasks-window').hidden = true; });
@@ -992,6 +1367,9 @@ function bind() {
 
   $$('[data-login]').forEach((btn) => {
     btn.addEventListener('click', () => loginSource(btn.dataset.login, btn));
+  });
+  $$('[data-qr]').forEach((btn) => {
+    btn.addEventListener('click', () => openQrLogin(btn.dataset.qr));
   });
   $$('[data-logout]').forEach((btn) => {
     btn.addEventListener('click', async () => {
