@@ -293,23 +293,20 @@ class Handler(BaseHTTPRequestHandler):
                               'auth_enabled': False})
                     return
                 user = service.user_by_token(self._token())
-                if not user:
-                    self._fail('请先登录', 401)
-                else:
+                if user:
                     self._ok({'user': {'id': user['id'], 'username': user['username']},
                               'auth_enabled': True})
+                else:
+                    # 未登录不拦截：以访客身份继续使用，登录入口保留在顶栏
+                    self._ok({'user': None, 'guest': True, 'auth_enabled': True})
                 return
-            if handler is None and not task_match and not file_match:
+            if (handler is None and not task_match and not file_match
+                    and path != '/api/files/archive'):
                 self._fail(f'未知接口：{path}', 404)
                 return
 
-            if service.enable_users:
-                user = service.user_by_token(self._token())
-                if not user:
-                    self._fail('请先登录', 401)
-                    return
-            else:
-                user = service.guest_user()
+            # 账号系统可选：有会话则用该用户，否则落到访客空间
+            user = service.user_by_token(self._token()) or service.guest_user()
 
             ctx = Ctx(service, user, self._token(), self._ip())
 
@@ -323,10 +320,24 @@ class Handler(BaseHTTPRequestHandler):
                     self._fail('未知接口', 404)
                 return
 
+            if path == '/api/files/archive' and method == 'GET':
+                ids = [part for part in str(payload.get('ids') or '').split(',') if part]
+                result = service.export_files(ctx.user_id, ids)
+                if result['kind'] == 'single':
+                    ok = self._send_file(result['row'])
+                else:
+                    ok = self._send_file({'path': result['path'],
+                                          'filename': result['filename']})
+                service.after_export(ctx.user_id, result, ok)
+                return
+
             if file_match:
                 file_id = file_match.group(1)
                 if method == 'GET' and path.endswith('/download'):
-                    self._send_file(service.file_for_download(ctx.user_id, file_id))
+                    row = service.file_for_download(ctx.user_id, file_id)
+                    ok = self._send_file(row)
+                    if ok and service.delete_after_export(ctx.user_id):
+                        service.delete_file(ctx.user_id, file_id)
                 elif method == 'DELETE':
                     self._ok(service.delete_file(ctx.user_id, file_id))
                 else:
@@ -360,14 +371,14 @@ class Handler(BaseHTTPRequestHandler):
             return
         self._send_bytes(200, body, ctype)
 
-    def _send_file(self, row: dict) -> None:
+    def _send_file(self, row: dict) -> bool:
         path = row['path']
         try:
             size = os.path.getsize(path)
             handle = open(path, 'rb')
         except OSError as exc:  # noqa: BLE001
             self._fail(f'文件读取失败：{exc}')
-            return
+            return False
         ctype = mimetypes.guess_type(path)[0] or 'application/octet-stream'
         self.send_response(200)
         self.send_header('Content-Type', ctype)
@@ -383,7 +394,8 @@ class Handler(BaseHTTPRequestHandler):
                         break
                     self.wfile.write(chunk)
         except (BrokenPipeError, ConnectionResetError):
-            pass   # 客户端中途取消下载属正常
+            return False   # 客户端中途取消下载属正常
+        return True
 
     def log_message(self, fmt, *args):
         try:

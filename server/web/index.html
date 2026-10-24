@@ -22,6 +22,7 @@
       <span class="divider"></span>
       <button id="btn-tasks" class="icon-btn" title="下载任务"><span class="icon-slot"></span><i class="dot" hidden></i></button>
       <button id="btn-files" class="icon-btn" title="我的文件"><span class="icon-slot"></span><span id="file-count" class="count-badge" hidden>0</span></button>
+      <button id="btn-source" class="icon-btn" title="音源登录（扫码）"><span class="icon-slot"></span></button>
       <button id="btn-settings" class="icon-btn" title="设置"><span class="icon-slot"></span></button>
     </div>
   </header>
@@ -109,8 +110,52 @@
     <button id="files-close" class="icon-btn" title="关闭"></button>
   </div>
   <div class="pwin-body single">
+    <div class="files-bar">
+      <label class="pick"><input id="files-pick-all" type="checkbox"> 全选</label>
+      <span class="muted small" id="files-sel-count">未选择</span>
+      <span class="spacer"></span>
+      <button id="btn-export" class="tiny" disabled>导出选中</button>
+    </div>
     <div id="file-quota" class="file-quota"></div>
     <div id="file-list" class="task-list empty">还没有下载完成的文件</div>
+  </div>
+</div>
+
+<!-- 悬浮播放器窗口：下载模式下双击歌曲时弹出 -->
+<div id="player-window" class="pwin" hidden>
+  <div class="pwin-head" data-drag>
+    <b>播放器</b>
+    <span class="spacer"></span>
+    <button id="pw-close" class="icon-btn" title="关闭"></button>
+  </div>
+  <div class="pwin-body">
+    <div class="pwin-left">
+      <img id="pw-cover" class="pw-cover" alt="">
+      <h3 id="pw-name" class="marquee"><span class="mq">未在播放</span></h3>
+      <p id="pw-artist" class="muted small"></p>
+      <div class="pl-progress">
+        <span id="pw-cur" class="mono">00:00</span>
+        <input id="pw-seek" type="range" min="0" max="1000" value="0" step="1">
+        <span id="pw-dur" class="mono">00:00</span>
+      </div>
+      <div class="pl-ctl">
+        <button id="pw-prev" class="icon-btn" title="上一首"></button>
+        <button id="pw-toggle" class="icon-btn play" title="播放 / 暂停"></button>
+        <button id="pw-next" class="icon-btn" title="下一首"></button>
+        <button id="pw-mode" class="ghost tiny" title="播放模式">顺序播放</button>
+      </div>
+      <div class="pl-vol">
+        <button id="pw-mute" class="icon-btn small" title="静音 / 恢复"></button>
+        <input id="pw-volume" type="range" min="0" max="100" value="100" step="1">
+      </div>
+    </div>
+    <div class="pwin-right">
+      <div class="pw-panels">
+        <div class="pw-panel">
+          <div id="pw-lyric" class="lyric-box is-empty">（暂无歌词）</div>
+        </div>
+      </div>
+    </div>
   </div>
 </div>
 
@@ -118,7 +163,7 @@
 <div id="auth-mask" class="modal-mask" hidden>
   <div class="modal auth-modal">
     <h3>音乐下载器 <span class="tag">Server</span></h3>
-    <p class="auth-sub muted small">公共下载服务 · 登录后检索并下载到你的空间</p>
+    <p class="auth-sub muted small">登录可选：登录后文件、音源凭据与偏好保存到你的账号；不登录也能直接使用。</p>
     <div class="tabs-mini" id="auth-tabs">
       <button class="active" data-tab="login">登录</button>
       <button data-tab="register">注册</button>
@@ -148,7 +193,7 @@
     <h3>设置</h3>
     <div class="tabs-mini" id="settings-tabs">
       <button class="active" data-spanel="music">音乐</button>
-      <button data-spanel="account" class="auth-only">账号</button>
+      <button data-spanel="account" class="auth-only">账号 / 音源</button>
     </div>
     <div class="modal-body">
       <div data-spanel="music">
@@ -164,8 +209,14 @@
         </div>
         <h4 class="sub">存储</h4>
         <p class="field-note" id="quota-note"></p>
+        <div class="field"><span>文件保留</span><select id="pref-retention"></select></div>
+        <div class="checks">
+          <label><input id="pref-delete-after" type="checkbox"> 导出后立即删除源文件</label>
+        </div>
+        <p class="field-note">勾选多个文件导出时自动打包为 zip；单个文件直接下载原文件。</p>
       </div>
       <div data-spanel="account" class="auth-only" hidden>
+        <p class="field-note" id="account-cloud-note"></p>
         <h4 class="sub">网易云音乐</h4>
         <p class="field-note">粘贴浏览器 Cookie 以获取会员音质 / 我的歌单；不登录也可下载免费歌曲。</p>
         <div class="source-block">

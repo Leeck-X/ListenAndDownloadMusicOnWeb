@@ -169,6 +169,11 @@ class Store:
     def delete_file_row(self, file_id: str) -> None:
         self._write('DELETE FROM files WHERE id = ?', (file_id,))
 
+    def update_file_expiry(self, user_id: int, seconds: int) -> None:
+        """按新的保留时长重算该用户全部文件（以创建时间为基准）。"""
+        self._write('UPDATE files SET expires_at = created_at + ? WHERE user_id = ?',
+                    (int(seconds), user_id))
+
     def task_files(self, task_id: str) -> list:
         rows = self._all('SELECT * FROM files WHERE task_id = ?', (task_id,))
         return [dict(row) for row in rows]

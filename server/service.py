@@ -15,6 +15,7 @@ import secrets
 import shutil
 import threading
 import time
+import zipfile
 from collections import deque
 from concurrent.futures import ThreadPoolExecutor
 
@@ -37,7 +38,11 @@ DEFAULT_PREFS = {
     'embed_tag': True,
     'embed_cover': True,
     'embed_lyric': True,
+    'retention_hours': 72,
+    'delete_after_export': False,
 }
+# 允许的文件保留时长（小时），0 表示使用服务端默认
+RETENTION_CHOICES = (1, 6, 12, 24, 48, 72, 168, 720)
 
 _RE_NETEASE_SONG = re.compile(r'song\?id=(\d+)')
 _RE_QQ_SONG = re.compile(r'/songDetail/([0-9A-Za-z]+)')
@@ -285,22 +290,43 @@ class ServerService:
         levels = [value for value, _ in LEVELS_BY_SOURCE.get(data['source'], [])]
         if data.get('level') not in levels:
             data['level'] = 'exhigh' if 'exhigh' in levels else levels[0]
-        return data
+        return self.prefs_payload(data)
 
     def update_prefs(self, user_id: int, payload: dict) -> dict:
         current = self.prefs(user_id)
+        before = current.get('retention_hours')
         for key in DEFAULT_PREFS:
             if key in payload:
                 current[key] = payload[key]
         current = self.prefs_payload(current)
         self.store.save_prefs(user_id, prefs=current)
+        if current['retention_hours'] != before:
+            # 保留时长变化时同步调整已有文件的过期时间
+            self.store.update_file_expiry(user_id, current['retention_hours'] * 3600)
         self.contexts.reload(user_id, prefs=current)
         return current
+
+    def retention_hours(self, user_id: int) -> int:
+        pref = self.prefs(user_id).get('retention_hours')
+        try:
+            hours = int(pref)
+        except (TypeError, ValueError):
+            hours = 0
+        return hours if hours > 0 else int(self.cfg.get('retention_hours') or 72)
+
+    def delete_after_export(self, user_id: int) -> bool:
+        return bool(self.prefs(user_id).get('delete_after_export'))
 
     def prefs_payload(self, data: dict) -> dict:
         source = data.get('source') if data.get('source') in dict(SOURCES) else 'netease'
         levels = [value for value, _ in LEVELS_BY_SOURCE.get(source, [])]
         level = data.get('level') if data.get('level') in levels else levels[0]
+        try:
+            hours = int(data.get('retention_hours'))
+        except (TypeError, ValueError):
+            hours = DEFAULT_PREFS['retention_hours']
+        if hours not in RETENTION_CHOICES:
+            hours = DEFAULT_PREFS['retention_hours']
         return {
             'source': source,
             'level': level,
@@ -308,6 +334,8 @@ class ServerService:
             'embed_tag': bool(data.get('embed_tag', True)),
             'embed_cover': bool(data.get('embed_cover', True)),
             'embed_lyric': bool(data.get('embed_lyric', True)),
+            'retention_hours': hours,
+            'delete_after_export': bool(data.get('delete_after_export', False)),
         }
 
     def account_state(self, user_id: int, source: str) -> dict:
@@ -419,8 +447,7 @@ class ServerService:
     def meta(self, user_id: int) -> dict:
         usage = self.store.user_usage(user_id)
         quota = self._quota
-        username = '访客' if not self.enable_users else \
-            (self.store.get_user(user_id) or {}).get('username', '')
+        username = ((self.store.get_user(user_id) or {}).get('username') or '访客')
         return {
             'user': username,
             'auth_enabled': self.enable_users,
@@ -431,7 +458,8 @@ class ServerService:
             'quota': {'used': usage, 'limit': quota,
                       'used_str': human_size(usage) if usage else '0 B',
                       'limit_str': human_size(quota) if quota else '不限'},
-            'retention_hours': int(self.cfg.get('retention_hours') or 72),
+            'retention_hours': self.retention_hours(user_id),
+            'retention_choices': list(RETENTION_CHOICES),
             'max_tasks': int(self.cfg.get('max_tasks_per_user') or 2),
         }
 
@@ -636,7 +664,7 @@ class ServerService:
     def _register_file(self, task: DownloadTask, path: str, song: Song) -> str:
         file_id = secrets.token_hex(8)
         size = os.path.getsize(path) if os.path.exists(path) else 0
-        expires_at = int(time.time()) + self._retention
+        expires_at = int(time.time()) + self.retention_hours(task.user_id) * 3600
         self.store.add_file(file_id, task.user_id, task.id, song.name, song.artists,
                             path, os.path.basename(path), size, expires_at)
         return file_id
@@ -713,6 +741,66 @@ class ServerService:
         self._remove_file(row)
         self.store.delete_file_row(file_id)
         return {'deleted': True}
+
+    # ---------------- 导出 ----------------
+    def export_files(self, user_id: int, ids) -> dict:
+        """按勾选导出：单个直接给原文件，多个打包 zip（音频已压缩，直接存储不二次压缩）。"""
+        rows = []
+        for file_id in list(ids)[:500]:
+            file_id = str(file_id or '').strip()
+            if not file_id:
+                continue
+            row = self.store.get_file(file_id)
+            if not row or int(row['user_id']) != user_id:
+                continue
+            path = os.path.realpath(row['path'])
+            if os.path.isfile(path):
+                row['path'] = path
+                rows.append(row)
+        if not rows:
+            raise ServiceError('没有可导出的文件')
+        if len(rows) == 1:
+            return {'kind': 'single', 'row': rows[0], 'ids': [rows[0]['id']]}
+
+        folder = self._user_dir(user_id)
+        os.makedirs(folder, exist_ok=True)
+        filename = f'音乐下载-{len(rows)}首-{time.strftime("%Y%m%d-%H%M%S")}.zip'
+        temp = os.path.join(folder, f'.export-{secrets.token_hex(6)}.zip')
+        used = set()
+        try:
+            with zipfile.ZipFile(temp, 'w', zipfile.ZIP_STORED) as archive:
+                for row in rows:
+                    name = row['filename'] or os.path.basename(row['path'])
+                    base, ext = os.path.splitext(name)
+                    candidate, seq = name, 2
+                    while candidate in used:
+                        candidate = f'{base} ({seq}){ext}'
+                        seq += 1
+                    used.add(candidate)
+                    archive.write(row['path'], candidate)
+        except OSError as exc:
+            try:
+                os.remove(temp)
+            except OSError:
+                pass
+            raise ServiceError(f'打包失败：{exc}')
+        return {'kind': 'zip', 'path': temp, 'filename': filename,
+                'ids': [row['id'] for row in rows]}
+
+    def after_export(self, user_id: int, result: dict, success: bool) -> None:
+        """导出收尾：删除临时压缩包；开启「导出后即删」且下发成功时清理源文件。"""
+        if result.get('kind') == 'zip' and result.get('path'):
+            try:
+                os.remove(result['path'])
+            except OSError:
+                pass
+        if not success or not self.delete_after_export(user_id):
+            return
+        for file_id in result.get('ids') or []:
+            try:
+                self.delete_file(user_id, file_id)
+            except ServiceError:
+                pass
 
     @staticmethod
     def _remove_file(row: dict) -> None:

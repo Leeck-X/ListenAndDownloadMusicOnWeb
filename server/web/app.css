@@ -545,6 +545,14 @@ h4.sub:first-child { margin-top: 0; }
   border: 1px solid var(--line); border-radius: 8px;
 }
 .file-row .btn-link:hover { border-color: var(--brand); }
+.files-bar {
+  display: flex; align-items: center; gap: 10px;
+  padding: 8px 14px; border-bottom: 1px solid var(--line);
+  font-size: 12px; color: var(--muted);
+}
+.files-bar .pick { display: inline-flex; align-items: center; gap: 6px; color: var(--text); }
+.files-bar .spacer { flex: 1; }
+.file-row input[type="checkbox"] { flex: none; accent-color: var(--brand); }
 .task-list { height: 100%; }
 .task-list.empty { display: flex; align-items: center; justify-content: center; }
 
@@ -565,4 +573,14 @@ body.auth-off .auth-only { display: none !important; }
 .source-head .state.on { color: var(--ok); }
 .source-block textarea { width: 100%; margin-bottom: 8px; }
 .field-note { color: var(--muted); font-size: 12px; margin: 6px 0 10px; }
+
+/* 音源登录弹窗：每个音源一行，状态 + 扫码入口 */
+.src-row {
+  display: flex; align-items: center; gap: 10px;
+  padding: 10px 12px; margin-bottom: 8px;
+  border: 1px solid var(--line); border-radius: 8px; background: #17171d;
+}
+.src-row .src-name { font-weight: 600; }
+.src-row .state { margin-left: auto; font-size: 12px; color: var(--muted); }
+.src-row .state.on { color: var(--ok); }
 
