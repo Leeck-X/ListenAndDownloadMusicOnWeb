@@ -1658,7 +1658,7 @@ function openLoginDialog() {
     <label class="field" id="lg-type-wrap">QQ 登录方式<select id="lg-type">
       <option value="qq">QQ</option><option value="wx">微信</option><option value="mobile">手机</option>
     </select></label>
-    <div class="row"><button id="lg-start" class="primary">获取二维码</button>
+    <div class="row"><button id="lg-start" class="primary">刷新二维码</button>
       <button id="lg-cookie-toggle" class="ghost tiny">改用 Cookie 导入</button></div>
     <div class="qr-box" id="lg-qr" hidden><img id="lg-qr-img" alt="二维码">
       <span class="muted" id="lg-hint">等待扫码…</span></div>
@@ -1669,26 +1669,39 @@ function openLoginDialog() {
     </div>`;
   const m = modal('登录', html, [{ label: '关闭', onClick: close => { stopLoginPoll(); close(); } }]);
   m.body.querySelector('#lg-source').value = S.cfg.source;
+  const sourceSel = m.body.querySelector('#lg-source');
   const typeWrap = m.body.querySelector('#lg-type-wrap');
-  const syncType = () => { typeWrap.hidden = m.body.querySelector('#lg-source').value !== 'qq'; };
-  syncType();
-  m.body.querySelector('#lg-source').addEventListener('change', syncType);
+  const syncType = () => {
+    typeWrap.hidden = sourceSel.value !== 'qq';
+    /* 切换音源后直接刷新二维码，无需再点按钮 */
+    startQr();
+  };
+  sourceSel.addEventListener('change', syncType);
 
-  m.body.querySelector('#lg-start').addEventListener('click', async () => {
+  /* 打开窗口即自动获取二维码 */
+  async function startQr() {
     stopLoginPoll();
-    const source = m.body.querySelector('#lg-source').value;
+    const source = sourceSel.value;
     const type = m.body.querySelector('#lg-type').value;
+    const qr = m.body.querySelector('#lg-qr');
+    const img = m.body.querySelector('#lg-qr-img');
+    const hint = m.body.querySelector('#lg-hint');
+    qr.hidden = false;
+    img.hidden = true;
+    hint.textContent = '正在获取二维码…';
     try {
       const data = await api('/api/login/qr/start', { source, type });
-      const qr = m.body.querySelector('#lg-qr');
-      const img = m.body.querySelector('#lg-qr-img');
-      qr.hidden = false;
-      img.hidden = false;
       img.src = data.image;
-      m.body.querySelector('#lg-hint').textContent = '请使用手机 App 扫码并确认登录';
+      img.hidden = false;
+      hint.textContent = '请使用手机 App 扫码并确认登录';
       startLoginPoll(source, data.identifier, m);
-    } catch (err) { toast(err.message, 'error'); }
-  });
+    } catch (err) {
+      hint.textContent = '二维码获取失败，请重试';
+      toast(err.message, 'error');
+    }
+  }
+
+  m.body.querySelector('#lg-start').addEventListener('click', startQr);
 
   m.body.querySelector('#lg-cookie-toggle').addEventListener('click', () => {
     const box = m.body.querySelector('#lg-cookie');
@@ -1707,6 +1720,7 @@ function openLoginDialog() {
     } catch (err) { toast(err.message, 'error'); }
   });
   m.mask.addEventListener('click', ev => { if (ev.target === m.mask) stopLoginPoll(); });
+  syncType();
 }
 
 function startLoginPoll(source, identifier, m) {
