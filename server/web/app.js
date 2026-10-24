@@ -50,6 +50,26 @@ function icon(name, size) {
     aria-hidden="true">${body}</svg>`;
 }
 
+/* ==================== 音源 logo ==================== */
+const SOURCE_BRAND = {
+  netease: { color: '#e60026', label: '网易云音乐' },
+  qq: { color: '#31c27c', label: 'QQ 音乐' },
+};
+
+/* 音源 logo：圆角方块 + 品牌色 + 白色音符，用于音源切换按钮与未登录时的头像 / 封面 */
+function sourceLogo(source, size) {
+  const brand = SOURCE_BRAND[source] || SOURCE_BRAND.netease;
+  const px = size || 20;
+  return `<svg viewBox="0 0 24 24" width="${px}" height="${px}" aria-hidden="true">
+    <rect width="24" height="24" rx="6" fill="${brand.color}"/>
+    <path d="M14.6 5.4v8.2a2.7 2.7 0 1 1-1.6-2.47V7.7l-4 1v5.6a2.7 2.7 0 1 1-1.6-2.47V6.8z"
+      fill="#fff"/></svg>`;
+}
+
+function sourceLogoUri(source) {
+  return 'data:image/svg+xml;charset=utf-8,' + encodeURIComponent(sourceLogo(source, 96));
+}
+
 const state = {
   user: null, meta: null, prefs: null, authEnabled: true, authMode: 'login',
   scope: 'search', source: 'netease', view: 'download', account: null,
@@ -130,8 +150,11 @@ async function api(path, payload, method) {
 /* ==================== 图标注入 ==================== */
 function paintIcons() {
   Object.entries(ICON_IDS).forEach(([id, name]) => {
-    const slot = $(id) && $(id).querySelector('.icon-slot');
+    const btn = $(id);
+    if (!btn) return;
+    const slot = btn.querySelector('.icon-slot');
     if (slot) slot.innerHTML = icon(name, 18);
+    else btn.innerHTML = icon(name, btn.classList.contains('play') ? 22 : 18);
   });
   $$('#scope-group .scope-btn').forEach((btn) => {
     const slot = btn.querySelector('.icon-slot');
@@ -201,7 +224,8 @@ function paintSourceAvatar() {
     btn.innerHTML = `<img class="src-avatar" src="${esc(account.avatar)}" alt="">`;
     btn.title = `${label} · ${account.nickname || '已登录'}`;
   } else {
-    btn.innerHTML = `<span class="icon-slot">${icon('user', 18)}</span>`;
+    /* 未登录时用音源 logo 占位，避免头像位置出现空白 */
+    btn.innerHTML = sourceLogo(state.source, 22);
     btn.title = account.logged_in
       ? `${label} · ${account.nickname || '已登录'}` : '音源登录（扫码）';
   }
@@ -220,6 +244,7 @@ async function bootstrap() {
   paintIcons();
   initVolume();
   bind();
+  bindMenuGuards();
   try {
     const data = await api('/api/auth/me');
     state.user = data.user;
@@ -298,6 +323,28 @@ function syncPrefs() {
   });
   retention.value = String(prefs.retention_hours || 72);
   $('pref-delete-after').checked = !!prefs.delete_after_export;
+  paintSourceSwitch();
+}
+
+/* 查询栏方形音源按钮：显示当前音源 logo，点击循环切换并保存偏好 */
+function paintSourceSwitch() {
+  const btn = $('btn-src');
+  if (!btn || !state.meta) return;
+  btn.innerHTML = sourceLogo(state.source, 22);
+  btn.title = `当前音源：${sourceLabel(state.source)}，点击切换`;
+}
+
+async function switchSource() {
+  const sources = (state.meta.sources || []).map((item) => item.value);
+  if (sources.length < 2) { toast('当前仅有一个可用音源', 'error'); return; }
+  const index = Math.max(0, sources.indexOf(state.source));
+  const next = sources[(index + 1) % sources.length];
+  try {
+    await savePrefs({ source: next });
+    paintSourceSwitch();
+    toast(`已切换音源：${sourceLabel(next)}`, 'ok');
+    if (state.keyword && state.scope === 'search') searchRemote(state.keyword, 0);
+  } catch (err) { /* savePrefs 已提示错误 */ }
 }
 
 function retentionLabel(hours) {
@@ -446,10 +493,93 @@ async function loadLiked() {
 
 /* ==================== 一体式歌曲列表 ==================== */
 const COLS = [
-  ['pick', ''], ['idx', '#'], ['name', '歌曲'], ['artist', '歌手'],
-  ['album', '专辑'], ['dur', '时长'], ['size', '大小'],
+  { key: 'pick', label: '', width: 40 },
+  { key: 'idx', label: '#', width: 46 },
+  { key: 'name', label: '歌曲', width: 320 },
+  { key: 'artist', label: '歌手', width: 170 },
+  { key: 'album', label: '专辑', width: 190 },
+  { key: 'dur', label: '时长', width: 78 },
+  { key: 'size', label: '大小', width: 88 },
 ];
-const COL_WIDTHS = { pick: 40, idx: 46, name: 320, artist: 170, album: 190, dur: 78, size: 88 };
+const FIXED_COLS = new Set(['pick', 'idx']);
+const MIN_RATIO = 0.5;
+const MAX_WIDTH = 2000;
+const COL_STORE = 'nmd.colWidths';
+const colW = loadColWidths();
+
+function colMin(col) { return Math.round(col.width * MIN_RATIO); }
+
+function loadColWidths() {
+  const out = {};
+  COLS.forEach((col) => { out[col.key] = col.width; });
+  try {
+    const saved = JSON.parse(localStorage.getItem(COL_STORE) || '{}');
+    COLS.forEach((col) => {
+      if (FIXED_COLS.has(col.key)) return;
+      const width = Number(saved[col.key]);
+      if (width) out[col.key] = Math.max(colMin(col), Math.min(MAX_WIDTH, width));
+    });
+  } catch (err) { /* 无本地存储时用默认列宽 */ }
+  return out;
+}
+
+function saveColWidths() {
+  const out = {};
+  COLS.forEach((col) => { if (!FIXED_COLS.has(col.key)) out[col.key] = colW[col.key]; });
+  try { localStorage.setItem(COL_STORE, JSON.stringify(out)); } catch (err) { /* 忽略 */ }
+}
+
+function idxWidthFor(count) {
+  const digits = String(Math.max(1, count)).length;
+  return Math.max(46, 22 + digits * 9);
+}
+
+function tableMinWidth() { return COLS.reduce((sum, col) => sum + colW[col.key], 0); }
+
+function resizeColumn(table, key, width) {
+  colW[key] = width;
+  const col = table.querySelector(`col[data-col="${key}"]`);
+  if (col) col.style.width = width + 'px';
+  table.style.minWidth = tableMinWidth() + 'px';
+}
+
+/* 列宽拖拽：最小为默认一半，可任意拉长；双击恢复默认 */
+function bindColumnResize(container) {
+  container.addEventListener('mousedown', (event) => {
+    const handle = event.target.closest('.resizer');
+    if (!handle) return;
+    event.preventDefault();
+    event.stopPropagation();
+    const conf = COLS.find((col) => col.key === handle.dataset.col);
+    const table = container.querySelector('table');
+    if (!conf || !table || FIXED_COLS.has(conf.key)) return;
+    const startX = event.clientX;
+    const startWidth = colW[conf.key];
+    document.body.classList.add('col-resizing');
+    const onMove = (move) => {
+      const width = Math.max(colMin(conf),
+        Math.min(MAX_WIDTH, startWidth + (move.clientX - startX)));
+      resizeColumn(table, conf.key, width);
+    };
+    const onUp = () => {
+      document.removeEventListener('mousemove', onMove);
+      document.removeEventListener('mouseup', onUp);
+      document.body.classList.remove('col-resizing');
+      saveColWidths();
+    };
+    document.addEventListener('mousemove', onMove);
+    document.addEventListener('mouseup', onUp);
+  });
+
+  container.addEventListener('dblclick', (event) => {
+    const handle = event.target.closest('.resizer');
+    if (!handle) return;
+    event.stopPropagation();
+    const conf = COLS.find((col) => col.key === handle.dataset.col);
+    const table = container.querySelector('table');
+    if (conf && table) { resizeColumn(table, conf.key, conf.width); saveColWidths(); }
+  });
+}
 
 function visibleSongs() {
   if (state.scope === 'search') return state.songs;
@@ -460,14 +590,24 @@ function visibleSongs() {
   ));
 }
 
+function findSong(key) {
+  return visibleSongs().find((song) => song.key === key)
+    || state.songs.find((song) => song.key === key);
+}
+
 function songRows(songs) {
-  const cols = COLS.map(([key]) => (
-    `<col data-col="${key}" style="width:${COL_WIDTHS[key]}px">`
+  colW.idx = idxWidthFor(songs.length);
+  const cols = COLS.map((col) => (
+    `<col data-col="${col.key}" style="width:${colW[col.key]}px">`
   )).join('');
-  const heads = COLS.map(([key, label]) => {
-    if (key === 'pick') return '<th class="pick"></th>';
-    const cls = (key === 'dur' || key === 'size') ? ' class="num"' : '';
-    return `<th${cls}>${esc(label)}</th>`;
+  const heads = COLS.map((col) => {
+    if (col.key === 'pick') return '<th class="pick"></th>';
+    const cls = (col.key === 'dur' || col.key === 'size') ? ' class="num"' : '';
+    if (FIXED_COLS.has(col.key)) {
+      return `<th${cls} data-col="${col.key}">${esc(col.label)}</th>`;
+    }
+    return `<th${cls} data-col="${col.key}">${esc(col.label)}
+      <span class="resizer" data-col="${col.key}" title="拖动调整列宽，双击恢复默认"></span></th>`;
   }).join('');
   const rows = songs.map((song, index) => {
     const picked = state.selected.has(song.key) ? ' checked' : '';
@@ -486,7 +626,7 @@ function songRows(songs) {
       <td class="num" title="约 ${esc(song.size || '')}">${esc(song.size || '-')}</td>
     </tr>`;
   }).join('');
-  return `<table class="song-table" style="min-width:940px">
+  return `<table class="song-table" style="min-width:${tableMinWidth()}px">
     <colgroup>${cols}</colgroup>
     <thead><tr>${heads}</tr></thead><tbody>${rows}</tbody></table>`;
 }
@@ -551,8 +691,10 @@ function togglePickAll() {
 }
 
 /* ==================== 下载 ==================== */
-async function submitDownload(level) {
-  const songs = visibleSongs().filter((song) => state.selected.has(song.key));
+async function submitDownload(level, only) {
+  const songs = (only && only.length)
+    ? only.slice()
+    : visibleSongs().filter((song) => state.selected.has(song.key));
   if (!songs.length) { toast('请先勾选要下载的歌曲', 'error'); return; }
   const prefs = state.prefs || {};
   const button = $('btn-download-sel');
@@ -627,6 +769,111 @@ function openDownloadMenu(button) {
       submitDownload(prefs.level);
     }
   });
+}
+
+/* ==================== 通用右键菜单（与桌面版一致） ==================== */
+let activeMenu = null;
+
+function hideMenu() {
+  if (activeMenu) { activeMenu.remove(); activeMenu = null; }
+}
+
+function showMenu(items, opts) {
+  closeMenu();
+  hideMenu();
+  const box = document.createElement('div');
+  box.className = 'menu';
+  items.forEach((item) => {
+    if (item.separator) {
+      const line = document.createElement('div');
+      line.className = 'menu-sep';
+      box.appendChild(line);
+      return;
+    }
+    const node = document.createElement('button');
+    node.className = 'menu-item';
+    node.textContent = item.label;
+    if (item.disabled) node.disabled = true;
+    node.addEventListener('click', () => { hideMenu(); if (item.onClick) item.onClick(); });
+    box.appendChild(node);
+  });
+  $('menu-root').appendChild(box);
+
+  const options = opts || {};
+  const width = box.offsetWidth;
+  const height = box.offsetHeight;
+  let left = options.x || 0;
+  let top = options.y || 0;
+  if (left + width > window.innerWidth - 8) left = Math.max(8, window.innerWidth - width - 8);
+  if (top + height > window.innerHeight - 8) top = Math.max(8, top - height - 4);
+  box.style.left = left + 'px';
+  box.style.top = top + 'px';
+  activeMenu = box;
+}
+
+function bindMenuGuards() {
+  document.addEventListener('click', (event) => {
+    if (event.target.closest('.menu') || event.target.closest('[data-menu]')) return;
+    hideMenu();
+  });
+  document.addEventListener('contextmenu', (event) => {
+    if (!event.target.closest('.song-list')) hideMenu();
+  }, true);
+  document.addEventListener('keydown', (event) => {
+    if (event.key === 'Escape') { hideMenu(); closeMenu(); }
+  });
+  document.addEventListener('scroll', hideMenu, true);
+  window.addEventListener('resize', hideMenu);
+}
+
+async function copyText(text, label) {
+  try {
+    await navigator.clipboard.writeText(text);
+  } catch (err) {
+    const area = document.createElement('textarea');
+    area.value = text;
+    document.body.appendChild(area);
+    area.select();
+    document.execCommand('copy');
+    area.remove();
+  }
+  toast(`已复制${label}`, 'ok');
+}
+
+function appendToQueue(song) {
+  state.queue.push(song);
+  toast('已加入播放列表', 'ok');
+}
+
+function addNextPlay(song) {
+  const at = state.playIndex >= 0 ? state.playIndex + 1 : state.queue.length;
+  state.queue.splice(at, 0, song);
+  toast('已安排下一首播放', 'ok');
+}
+
+/* 歌曲行右键菜单：播放 / 下载 / 勾选 / 复制（对齐桌面版） */
+function openSongMenu(song, x, y) {
+  const prefs = state.prefs || {};
+  const picked = visibleSongs().filter((item) => state.selected.has(item.key));
+  const selected = state.selected.has(song.key);
+  const playing = currentSong() && currentSong().key === song.key;
+  showMenu([
+    { label: playing ? '暂停' : '播放此曲',
+      onClick: () => (playing ? togglePlay() : playSongByKey(song.key)) },
+    { label: '下一首播放', onClick: () => addNextPlay(song) },
+    { label: '添加到播放列表', onClick: () => appendToQueue(song) },
+    { separator: true },
+    { label: '下载此曲', onClick: () => submitDownload(prefs.level, [song]) },
+    { separator: true },
+    { label: selected ? '取消选中' : '选中此曲', onClick: () => togglePick(song.key) },
+    { label: `下载已选（${picked.length} 首）`, disabled: !picked.length,
+      onClick: () => submitDownload(prefs.level) },
+    { separator: true },
+    { label: '复制歌名', onClick: () => copyText(song.name, '歌名') },
+    { label: '复制「歌手 - 歌名」',
+      onClick: () => copyText(`${song.artists} - ${song.name}`, '歌曲信息') },
+    { label: '复制专辑名', onClick: () => copyText(song.album, '专辑名') },
+  ], { x, y });
 }
 
 /* ==================== 任务轮询 ==================== */
@@ -1050,14 +1297,10 @@ function paintModeButton() {
 
 function setCover(node, song) {
   if (!node) return;
-  const src = (song && song.cover) || avatarUrl();
-  if (src) {
-    node.src = src;
-    node.style.visibility = 'visible';
-  } else {
-    node.removeAttribute('src');
-    node.style.visibility = 'hidden';
-  }
+  const src = (song && song.cover) || avatarUrl()
+    || sourceLogoUri((song && song.source) || state.source);
+  node.src = src;
+  node.style.visibility = 'visible';
 }
 
 /* 查询栏右侧的封面按钮：有当前曲目时显示，点击打开播放器窗口 */
@@ -1065,7 +1308,9 @@ function paintCoverButton(song) {
   const btn = $('btn-cover');
   const img = $('btn-cover-img');
   if (!btn || !img) return;
-  const src = (song && song.cover) || avatarUrl();
+  const src = song
+    ? ((song.cover) || avatarUrl() || sourceLogoUri(song.source))
+    : '';
   if (src) {
     img.src = src;
     btn.hidden = false;
@@ -1135,6 +1380,10 @@ async function playIndex(index) {
   if (state.view === 'download') openPlayerWindow();
   try {
     const data = await api('/api/play', { song, level: (state.prefs || {}).level });
+    /* 切歌前先停掉旧音源，避免旧请求被中断产生 ERR_ABORTED 控制台报错 */
+    audio.pause();
+    audio.removeAttribute('src');
+    audio.load();
     audio.src = data.url;
     await audio.play().catch(() => { throw new Error('浏览器阻止了自动播放，请点播放键'); });
     state.playing = true;
@@ -1327,8 +1576,7 @@ async function openQrLogin(source, onDone) {
   mask.innerHTML = `<div class="modal" style="min-width:min(340px,92vw)">
     <h3>${label}扫码登录</h3>
     <div class="qr-box"><img id="qr-img" alt="二维码">
-      <span id="qr-hint" class="muted">正在获取二维码…</span>
-      <a id="qr-url" class="muted small" target="_blank" rel="noopener" hidden></a></div>
+      <span id="qr-hint" class="muted">正在获取二维码…</span></div>
     <div class="modal-foot"><button class="ghost" data-close>关闭</button></div>
   </div>`;
   document.body.appendChild(mask);
@@ -1348,14 +1596,15 @@ async function openQrLogin(source, onDone) {
 
   const img = mask.querySelector('#qr-img');
   const hint = mask.querySelector('#qr-hint');
-  const link = mask.querySelector('#qr-url');
-  if (data.image) img.src = data.image; else img.hidden = true;
-  if (data.kind === 'url' && data.url) {
-    link.href = data.url;
-    link.textContent = '打开登录页';
-    link.hidden = false;
+  if (data.image) {
+    img.src = data.image;
+    img.hidden = false;
+  } else {
+    img.hidden = true;
+    hint.textContent = '二维码获取失败，请重试';
+    return;
   }
-  hint.textContent = '请用手机扫码';
+  hint.textContent = '请用手机扫码并确认登录';
 
   qrTimer = setInterval(async () => {
     try {
@@ -1433,6 +1682,7 @@ function bind() {
     filterTimer = setTimeout(renderSongs, 180);
   });
   $('btn-my-playlists').addEventListener('click', openMyPlaylists);
+  $('btn-src').addEventListener('click', switchSource);
   $('btn-cover').addEventListener('click', () => openPlayerWindow());
 
   /* 列表 */
@@ -1450,9 +1700,18 @@ function bind() {
   $('btn-download-sel').addEventListener('click', () => submitDownload());
   $('btn-play-all').addEventListener('click', playAll);
   $('song-list').addEventListener('dblclick', (event) => {
+    if (event.target.closest('.pick') || event.target.closest('.resizer')) return;
     const row = event.target.closest('tr[data-key]');
     if (row) playSongByKey(row.dataset.key);
   });
+  $('song-list').addEventListener('contextmenu', (event) => {
+    const row = event.target.closest('tr[data-key]');
+    if (!row) return;
+    event.preventDefault();
+    const song = findSong(row.dataset.key);
+    if (song) openSongMenu(song, event.clientX, event.clientY);
+  });
+  bindColumnResize($('song-list'));
 
   /* 滚动加载 */
   $('song-area').addEventListener('scroll', (event) => {

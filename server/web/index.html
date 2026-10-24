@@ -34,6 +34,7 @@
         <button class="scope-btn" data-scope="link" title="按歌单 / 单曲链接 或 ID 加载"><span class="icon-slot"></span></button>
         <button class="scope-btn like-btn auth-only" id="btn-liked" data-scope="liked" title="我喜欢的音乐"><span class="icon-slot"></span></button>
       </div>
+      <button id="btn-src" class="src-switch" title="切换音源"></button>
       <input id="query-input" type="text" placeholder="搜索歌曲 / 歌手 / 专辑，或粘贴歌单链接、歌单 ID">
       <button id="btn-query" class="primary">搜索</button>
       <button id="btn-my-playlists" class="ghost">我的歌单</button>
@@ -253,6 +254,7 @@
 
 <audio id="audio" preload="metadata"></audio>
 <div id="modal-root"></div>
+<div id="menu-root"></div>
 <div id="toast-root"></div>
 
 <script src="app.js"></script>
