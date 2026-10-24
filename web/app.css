@@ -42,6 +42,13 @@ button.primary:hover { filter: brightness(1.08); }
 button.ghost { background: transparent; }
 button.tiny { padding: 2px 8px; font-size: 12px; }
 :focus-visible { outline: 2px solid var(--brand); outline-offset: 1px; }
+/* 复选框 / 单选框 / 滑块 / 按钮点击后不再描边，避免「点一下多个框」 */
+input[type=checkbox]:focus-visible,
+input[type=radio]:focus-visible,
+input[type=range]:focus-visible,
+button:focus-visible,
+label:focus-visible,
+.pick:focus-visible { outline: none; }
 
 input, select, textarea {
   font: inherit;
@@ -53,7 +60,8 @@ input, select, textarea {
 }
 select { padding: 6px 4px; }
 input[readonly] { color: var(--muted); cursor: default; background: var(--panel-2); }
-input:focus, select:focus, textarea:focus { outline: 1px solid var(--brand); }
+input[type=text]:focus, input[type=search]:focus, textarea:focus, select:focus { outline: 1px solid var(--brand); }
+input[type=checkbox]:focus, input[type=radio]:focus, input[type=range]:focus { outline: none; box-shadow: none; }
 input[type=range] { accent-color: var(--brand); padding: 0; background: transparent; border: none; }
 textarea { resize: vertical; font-family: Consolas, monospace; font-size: 12px; }
 
@@ -121,6 +129,14 @@ textarea { resize: vertical; font-family: Consolas, monospace; font-size: 12px; 
 .scope-btn:hover { color: var(--text); border-color: transparent; }
 .scope-btn.active { background: var(--brand); color: #fff; }
 #query-input { flex: 1 1 auto; min-width: 120px; }
+
+/* 方形音源切换按钮：显示当前音源 logo，点击切换 */
+.src-switch {
+  width: 34px; height: 34px; border-radius: 8px; padding: 0;
+  background: var(--panel-2); border: 1px solid var(--line); flex: none;
+}
+.src-switch svg { display: block; border-radius: 5px; }
+.src-switch:hover { border-color: var(--brand); }
 #btn-my-playlists { flex: none; padding: 0 14px; }
 .query-bar input, .query-bar button { height: 34px; }
 .query-bar button { display: inline-flex; align-items: center; justify-content: center; }
@@ -191,11 +207,11 @@ td.name { padding-top: 4px; padding-bottom: 4px; }
 
 /* 列宽拖拽手柄 */
 .resizer {
-  position: absolute; top: 0; right: -3px; width: 8px; height: 100%;
+  position: absolute; top: 0; right: -5px; width: 12px; height: 100%;
   cursor: col-resize; z-index: 3;
 }
 .resizer::after {
-  content: ''; position: absolute; top: 6px; bottom: 6px; left: 3px;
+  content: ''; position: absolute; top: 6px; bottom: 6px; left: 5px;
   width: 1px; background: transparent;
 }
 th:hover .resizer::after { background: var(--muted); }

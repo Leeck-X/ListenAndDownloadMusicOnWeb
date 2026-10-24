@@ -48,6 +48,25 @@ function icon(name, size = 18) {
   return `<svg viewBox="0 0 24 24" width="${size}" height="${size}" ${paint} aria-hidden="true">${body}</svg>`;
 }
 
+/* ==================== 音源 logo ==================== */
+const SOURCE_BRAND = {
+  netease: { color: '#e60026', label: '网易云音乐' },
+  qq: { color: '#31c27c', label: 'QQ 音乐' },
+};
+
+/* 音源 logo：圆角方块 + 品牌色 + 白色音符，用于音源切换按钮与默认头像 / 封面 */
+function sourceLogo(source, size = 20) {
+  const brand = SOURCE_BRAND[source] || SOURCE_BRAND.netease;
+  return `<svg viewBox="0 0 24 24" width="${size}" height="${size}" aria-hidden="true">
+    <rect width="24" height="24" rx="6" fill="${brand.color}"/>
+    <path d="M14.6 5.4v8.2a2.7 2.7 0 1 1-1.6-2.47V7.7l-4 1v5.6a2.7 2.7 0 1 1-1.6-2.47V6.8z"
+      fill="#fff"/></svg>`;
+}
+
+function sourceLogoUri(source) {
+  return 'data:image/svg+xml;charset=utf-8,' + encodeURIComponent(sourceLogo(source, 96));
+}
+
 /* ==================== 全局状态 ==================== */
 const S = {
   meta: null, cfg: null, account: null,
@@ -603,6 +622,31 @@ function buildScopes() {
   $('#btn-query').addEventListener('click', () => runQuery(false));
   $('#query-input').addEventListener('keydown', ev => { if (ev.key === 'Enter') runQuery(false); });
   $('#btn-my-playlists').addEventListener('click', openMyPlaylists);
+  $('#btn-src').addEventListener('click', switchSource);
+}
+
+/* 查询栏方形音源按钮：显示当前音源 logo，点击循环切换并保存偏好 */
+function paintSourceSwitch() {
+  const btn = $('#btn-src');
+  if (!btn || !S.cfg) return;
+  btn.innerHTML = sourceLogo(S.cfg.source, 22);
+  btn.title = `当前音源：${labelOf(S.meta?.sources, S.cfg.source)}，点击切换`;
+}
+
+async function switchSource() {
+  const sources = (S.meta?.sources || []).map(s => s.value);
+  if (sources.length < 2) return toast('当前仅有一个可用音源', 'error');
+  const index = Math.max(0, sources.indexOf(S.cfg.source));
+  const next = sources[(index + 1) % sources.length];
+  try {
+    S.cfg = await api('/api/config', { source: next });
+    paintSourceSwitch();
+    setQueryMeta();
+    toast(`已切换音源：${labelOf(S.meta?.sources, next)}`, 'ok');
+    await refreshAccount();
+    await loadLikedKeys();
+    await replayQuery();
+  } catch (err) { toast(err.message, 'error'); }
 }
 
 /* 爱心高亮：仅在当前展示的是「我喜欢的音乐」时点亮 */
@@ -1563,6 +1607,7 @@ async function saveSettings(root) {
     if (logLevelSel) logLevelSel.value = S.logLevel;
     toast('设置已保存', 'ok');
     setQueryMeta();
+    paintSourceSwitch();
     updateStatusLyric();
     if (S.cfg.source !== prevSource || S.cfg.level !== prevLevel) {
       /* 音源 / 音质变化：保留关键词，自动重新拉取并覆盖旧结果 */
@@ -1599,6 +1644,7 @@ async function importConfig(ev) {
     await loadLikedKeys();
     if (S.lastText) await replayQuery();
     setQueryMeta();
+    paintSourceSwitch();
     toast('配置已导入并生效', 'ok');
   } catch (err) { toast('导入失败：' + err.message, 'error'); }
 }
@@ -1615,8 +1661,7 @@ function openLoginDialog() {
     <div class="row"><button id="lg-start" class="primary">获取二维码</button>
       <button id="lg-cookie-toggle" class="ghost tiny">改用 Cookie 导入</button></div>
     <div class="qr-box" id="lg-qr" hidden><img id="lg-qr-img" alt="二维码">
-      <span class="muted" id="lg-hint">等待扫码…</span>
-      <a class="muted small" id="lg-url" target="_blank" hidden></a></div>
+      <span class="muted" id="lg-hint">等待扫码…</span></div>
     <div id="lg-cookie" hidden style="margin-top:10px">
       <textarea id="lg-cookie-text" rows="4" style="width:100%"
         placeholder="粘贴浏览器 Cookie（网易云：MUSIC_U=…；QQ：uin=…; qm_keyst=…）"></textarea>
@@ -1636,14 +1681,11 @@ function openLoginDialog() {
     try {
       const data = await api('/api/login/qr/start', { source, type });
       const qr = m.body.querySelector('#lg-qr');
+      const img = m.body.querySelector('#lg-qr-img');
       qr.hidden = false;
-      m.body.querySelector('#lg-hint').textContent = '等待扫码…';
-      m.body.querySelector('#lg-url').hidden = true;
-      if (data.kind === 'image') {
-        m.body.querySelector('#lg-qr-img').src = data.image;
-      } else {
-        await showUrlQr(m.body.querySelector('#lg-qr-img'), data.url, m.body.querySelector('#lg-url'));
-      }
+      img.hidden = false;
+      img.src = data.image;
+      m.body.querySelector('#lg-hint').textContent = '请使用手机 App 扫码并确认登录';
       startLoginPoll(source, data.identifier, m);
     } catch (err) { toast(err.message, 'error'); }
   });
@@ -1665,25 +1707,6 @@ function openLoginDialog() {
     } catch (err) { toast(err.message, 'error'); }
   });
   m.mask.addEventListener('click', ev => { if (ev.target === m.mask) stopLoginPoll(); });
-}
-
-async function showUrlQr(img, url, linkNode) {
-  linkNode.href = url; linkNode.textContent = url; linkNode.hidden = false;
-  try {
-    await loadScript('https://cdn.jsdelivr.net/npm/qrcode@1.5.3/build/qrcode.min.js');
-    img.src = await window.QRCode.toDataURL(url, { width: 200, margin: 1 });
-  } catch (err) { img.style.display = 'none'; }
-}
-
-function loadScript(src) {
-  return new Promise((resolve, reject) => {
-    if (window.QRCode) return resolve();
-    const node = document.createElement('script');
-    node.src = src;
-    node.onload = resolve;
-    node.onerror = () => reject(new Error('二维码库加载失败'));
-    document.head.appendChild(node);
-  });
 }
 
 function startLoginPoll(source, identifier, m) {
@@ -1737,7 +1760,7 @@ function paintCoverButton(song) {
   const btn = $('#btn-cover');
   const img = $('#btn-cover-img');
   if (!btn || !img) return;
-  const src = (song && song.cover) || avatarUrl();
+  const src = song ? (song.cover || avatarUrl() || sourceLogoUri(song.source)) : '';
   if (src) { img.src = src; btn.hidden = false; }
   else { img.removeAttribute('src'); btn.hidden = true; }
 }
@@ -1764,9 +1787,10 @@ function avatarUrl() {
 function setCover(sel, song) {
   const node = $(sel);
   if (!node) return;
-  const src = (song && song.cover) || avatarUrl();
-  if (src) { node.src = src; node.style.visibility = 'visible'; }
-  else { node.removeAttribute('src'); node.style.visibility = 'hidden'; }
+  const src = (song && song.cover) || avatarUrl()
+    || sourceLogoUri((song && song.source) || S.cfg?.source);
+  node.src = src;
+  node.style.visibility = 'visible';
 }
 
 async function playIndex(index) {
@@ -1785,6 +1809,10 @@ async function playIndex(index) {
   renderQueue();
   try {
     const data = await api('/api/play', { song, level: S.cfg.level });
+    /* 切歌前先停掉旧音源，避免旧请求被中断产生 ERR_ABORTED 控制台报错 */
+    audio.pause();
+    audio.removeAttribute('src');
+    audio.load();
     audio.src = data.url;
     await audio.play().catch(() => { throw new Error('浏览器阻止了自动播放，请点播放键'); });
     S.play.playing = true;
@@ -2173,6 +2201,7 @@ async function boot() {
   paintScope('search');
   setScopePlaceholder('search');
   setQueryMeta();
+  paintSourceSwitch();
   renderQueue();
 
   await refreshAccount();

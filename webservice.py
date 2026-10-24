@@ -41,6 +41,21 @@ CANCEL_CLEANUP_LABELS = {'ask': '每次询问', 'delete': '总是删除文件', 
 
 LOG_LEVEL_ORDER = {'debug': 10, 'info': 20, 'warn': 30, 'error': 40}
 
+
+def _qr_png_data_url(text: str) -> str:
+    """把二维码内容渲染成 PNG data URL，二维码在服务端生成，前端无需外网依赖。"""
+    try:
+        import qrcode
+    except Exception:  # noqa: BLE001 - 缺依赖时返回空串
+        return ''
+    try:
+        image = qrcode.make(text)
+        buffer = io.BytesIO()
+        image.save(buffer, format='PNG')
+        return 'data:image/png;base64,' + base64.b64encode(buffer.getvalue()).decode('ascii')
+    except Exception:  # noqa: BLE001 - 渲染失败返回空串
+        return ''
+
 # 单曲链接：网易云 /song?id=xxx，QQ /songDetail/<songmid>
 _RE_NETEASE_SONG = re.compile(r'song\?id=(\d+)')
 _RE_QQ_SONG = re.compile(r'/songDetail/([0-9A-Za-z]+)')
@@ -442,8 +457,11 @@ class WebService:
         unikey = api.qrcode_unikey()
         if not unikey:
             raise ServiceError('获取二维码失败')
-        return {'kind': 'url', 'identifier': unikey,
-                'url': f'https://music.163.com/login?codekey={unikey}'}
+        url = f'https://music.163.com/login?codekey={unikey}'
+        image = _qr_png_data_url(url)
+        if not image:
+            raise ServiceError('二维码生成失败，请确认已安装 qrcode 依赖')
+        return {'kind': 'image', 'identifier': unikey, 'url': url, 'image': image}
 
     def qr_poll(self, source: str = None, identifier: str = '') -> dict:
         source = source or self.cfg.get('source', 'netease')
