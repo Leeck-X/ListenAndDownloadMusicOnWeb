@@ -77,6 +77,45 @@ python MusicDownloaderWeb.py
 
 启动后终端输出访问地址（默认 `http://127.0.0.1:8756`）与当前配置摘要，**不会自动打开浏览器**。桌面窗口展示服务状态与实时日志，关闭即最小化至系统托盘，托盘菜单可重新打开窗口 / 打开网页 / 退出。
 
+## Server 版（公网多用户部署）
+
+仓库同时提供面向公网的多用户服务端，代码位于 `server/`，与本地版仅共享音源与下载核心模块，配置、数据、部署方式完全独立。
+
+### 与本地版的差异
+
+- 配置由单用户本地文件改为按用户存入 SQLite，登录态（网易云 Cookie / QQ 凭证）与下载偏好均按用户隔离
+- 移除桌面窗口、系统托盘、关机 / 提示音 / 弹窗 / 打开目录等本地动作，服务纯后台常驻；成品文件通过浏览器取回
+- 移除配置导入导出与本机路径设置；保留 **扫码登录**（网易云 / QQ）与 Cookie 导入两种方式
+- 保留 **播放器模式**：服务端只返回音源直链，音频由浏览器直接拉取，不占用服务器带宽
+- 「我的文件」支持多选导出：单个直接下发原文件，多个自动打包为 zip；文件保留时长可在设置中调整，并可选择「导出后立即删除源文件」
+- 新增账号注册登录、每用户 Cookie 隔离、存储配额、文件过期清理、并发任务限制
+- 账号系统可选：未登录直接以访客身份使用全部功能（文件与音源凭据落在访客空间），登录后归入个人账号
+
+### 运行
+
+```bash
+pip install -r server/requirements.txt
+python server/app.py
+```
+
+默认监听 `0.0.0.0:3434`，首次启动自动生成 `server/server_config.json` 并创建数据目录 `server/server_data`（SQLite 数据库 `app.db` + 各用户下载文件）。
+
+### 配置
+
+服务器级参数由 `server/server_config.json` 或环境变量控制：
+
+- `host` / `port`：监听地址与端口，也可用 `MD_SERVER_HOST` / `MD_SERVER_PORT`
+- `data_dir`：数据目录（`MD_SERVER_DATA_DIR`）
+- `enable_users`：是否启用账号系统，默认 `true`；置为 `false` 后无需登录，所有人共用访客空间，前端隐藏登录 / 注册 / 退出 / 账号登录与「我喜欢」入口（`MD_SERVER_ENABLE_USERS`）
+- `quota_mb`：每用户存储配额，0 表示不限（`MD_SERVER_QUOTA_MB`）
+- `retention_hours`：成品文件保留时长，到期自动删除（`MD_SERVER_RETENTION_HOURS`）
+- `max_tasks_per_user` / `download_workers`：每用户并行任务数与单任务并发下载数
+- `weapi_keys` / `qq_credential`：由管理员统一配置的公共密钥，前端无读取与修改入口
+
+### 安全约定
+
+密码使用 PBKDF2-HMAC-SHA256（20 万轮）散列，长度要求 4~128 位；会话令牌仅以摘要入库，Cookie 为 HttpOnly + SameSite=Lax；登录失败按 IP 与用户名限流；请求体有大小上限；文件下载校验归属并约束在用户目录内。公网部署应置于 HTTPS 反向代理之后，并将 `secure_cookie` 置为 `true`。
+
 ## 目录结构
 
 ```text
@@ -97,6 +136,15 @@ python MusicDownloaderWeb.py
 │   ├── index.html
 │   ├── app.css
 │   └── app.js
+├── server/                # 公网多用户服务端（独立入口与前端）
+│   ├── app.py             # 入口：监听端口、初始化数据库与清理线程
+│   ├── config.py          # 服务器级配置（server_config.json / 环境变量）
+│   ├── store.py           # SQLite：账号 / 会话 / 偏好 / 文件
+│   ├── accounts.py        # 密码散列、会话令牌、登录限流
+│   ├── context.py         # 每用户独立音源实例池
+│   ├── service.py         # 业务层（检索 / 下载任务 / 配额 / 过期清理）
+│   ├── routes.py          # HTTP 路由、鉴权与文件流式下载
+│   └── web/               # 前端（沿用桌面版界面：登录、检索、任务、文件）
 ├── config.json            # 配置与凭证（不入库，运行后自动生成）
 └── requirements.txt       # 依赖清单
 ```

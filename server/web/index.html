@@ -1,0 +1,262 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>音乐下载器 · Server</title>
+<link rel="stylesheet" href="app.css">
+</head>
+<body>
+<div id="app">
+  <header class="topbar">
+    <div class="brand">音乐下载器 <span class="tag">Server</span></div>
+    <button id="btn-mode" class="mode-btn" title="切换到播放器模式"></button>
+    <div class="spacer"></div>
+    <div class="account auth-only">
+      <span id="account-text" class="muted small">未登录</span>
+      <button id="btn-login" class="ghost tiny">登录</button>
+      <button id="btn-logout" class="ghost tiny" hidden>退出</button>
+    </div>
+    <div class="icon-group">
+      <button id="btn-download" class="icon-btn" title="下载选中"><span class="icon-slot"></span></button>
+      <span class="divider"></span>
+      <button id="btn-tasks" class="icon-btn" title="下载任务"><span class="icon-slot"></span><i class="dot" hidden></i></button>
+      <button id="btn-files" class="icon-btn" title="我的文件"><span class="icon-slot"></span><span id="file-count" class="count-badge" hidden>0</span></button>
+      <button id="btn-source" class="icon-btn" title="音源登录（扫码）"><span class="icon-slot"></span></button>
+      <button id="btn-settings" class="icon-btn" title="设置"><span class="icon-slot"></span></button>
+    </div>
+  </header>
+
+  <section id="download-view" class="view">
+    <div class="query-bar">
+      <div class="scope-group" id="scope-group">
+        <button class="scope-btn active" data-scope="search" title="按关键词搜索"><span class="icon-slot"></span></button>
+        <button class="scope-btn" data-scope="link" title="按歌单 / 单曲链接 或 ID 加载"><span class="icon-slot"></span></button>
+        <button class="scope-btn like-btn auth-only" id="btn-liked" data-scope="liked" title="我喜欢的音乐"><span class="icon-slot"></span></button>
+      </div>
+      <button id="btn-src" class="src-switch" title="切换音源"></button>
+      <input id="query-input" type="text" placeholder="搜索歌曲 / 歌手 / 专辑，或粘贴歌单链接、歌单 ID">
+      <button id="btn-query" class="primary">搜索</button>
+      <button id="btn-my-playlists" class="ghost">我的歌单</button>
+      <button id="btn-cover" class="cover-btn" title="当前播放 · 打开播放器窗口" hidden>
+        <img id="btn-cover-img" alt="">
+      </button>
+    </div>
+    <div class="list-bar" id="song-bar">
+      <span id="list-status" class="muted small"></span>
+      <span class="spacer"></span>
+      <span id="list-pick" class="pick-hint muted small" hidden></span>
+      <span class="sep muted" hidden>·</span>
+      <span id="list-count" class="muted small"></span>
+      <button id="btn-pick-all" class="ghost tiny" hidden>全选</button>
+      <button id="btn-play-all" class="ghost tiny" hidden>全部播放</button>
+      <button id="btn-download-sel" class="primary tiny" hidden>下载选中</button>
+    </div>
+    <div class="table-wrap" id="song-area">
+      <div id="song-list" class="song-list empty">暂无内容，试试搜索或粘贴歌单链接</div>
+    </div>
+  </section>
+
+  <!-- 播放器模式：封面信息 + 歌词 -->
+  <section id="play-view" class="view" hidden>
+    <div class="player">
+      <div class="player-left">
+        <img id="pl-cover" class="pl-cover" alt="">
+        <h2 id="pl-name">未在播放</h2>
+        <p class="muted" id="pl-artist">双击列表中的歌曲即可播放</p>
+        <div class="pl-progress">
+          <span id="pl-cur" class="mono">00:00</span>
+          <input id="pl-seek" type="range" min="0" max="1000" value="0" step="1">
+          <span id="pl-dur" class="mono">00:00</span>
+        </div>
+        <div class="pl-ctl">
+          <button id="pl-prev" class="icon-btn" title="上一首"></button>
+          <button id="pl-toggle" class="icon-btn play" title="播放 / 暂停"></button>
+          <button id="pl-next" class="icon-btn" title="下一首"></button>
+          <button id="pl-mode" class="ghost tiny" title="播放模式">顺序播放</button>
+        </div>
+        <div class="pl-vol">
+          <button id="pl-mute" class="icon-btn small" title="静音 / 恢复"></button>
+          <input id="pl-volume" type="range" min="0" max="100" value="100" step="1">
+        </div>
+        <div id="pl-hint" class="muted small"></div>
+      </div>
+      <div class="player-right">
+        <div id="pl-lyric" class="lyric-box is-empty">（暂无歌词）</div>
+      </div>
+    </div>
+  </section>
+
+  <footer class="statusbar">
+    <div class="progress"><div class="bar" id="global-bar"></div></div>
+    <button id="global-pct" class="status-pct" title="当前任务进度">—</button>
+  </footer>
+</div>
+
+<!-- 下载任务窗口 -->
+<div id="tasks-window" class="pwin tasks-win" hidden>
+  <div class="pwin-head" data-drag>
+    <b>下载任务</b>
+    <span class="muted small" id="tasks-count"></span>
+    <span class="spacer"></span>
+    <button id="tasks-close" class="icon-btn" title="关闭"></button>
+  </div>
+  <div class="pwin-body single">
+    <div id="task-list" class="task-list empty">暂无下载任务</div>
+  </div>
+</div>
+
+<!-- 我的文件窗口 -->
+<div id="files-window" class="pwin files-win" hidden>
+  <div class="pwin-head" data-drag>
+    <b>我的文件</b>
+    <span class="spacer"></span>
+    <button id="files-close" class="icon-btn" title="关闭"></button>
+  </div>
+  <div class="pwin-body single">
+    <div class="files-bar">
+      <label class="pick"><input id="files-pick-all" type="checkbox"> 全选</label>
+      <span class="muted small" id="files-sel-count">未选择</span>
+      <span class="spacer"></span>
+      <button id="btn-export" class="tiny" disabled>导出选中</button>
+    </div>
+    <div id="file-quota" class="file-quota"></div>
+    <div id="file-list" class="task-list empty">还没有下载完成的文件</div>
+  </div>
+</div>
+
+<!-- 悬浮播放器窗口：下载模式下双击歌曲时弹出 -->
+<div id="player-window" class="pwin" hidden>
+  <div class="pwin-head" data-drag>
+    <b>播放器</b>
+    <span class="spacer"></span>
+    <button id="pw-close" class="icon-btn" title="关闭"></button>
+  </div>
+  <div class="pwin-body">
+    <div class="pwin-left">
+      <img id="pw-cover" class="pw-cover" alt="">
+      <h3 id="pw-name" class="marquee"><span class="mq">未在播放</span></h3>
+      <p id="pw-artist" class="muted small"></p>
+      <div class="pl-progress">
+        <span id="pw-cur" class="mono">00:00</span>
+        <input id="pw-seek" type="range" min="0" max="1000" value="0" step="1">
+        <span id="pw-dur" class="mono">00:00</span>
+      </div>
+      <div class="pl-ctl">
+        <button id="pw-prev" class="icon-btn" title="上一首"></button>
+        <button id="pw-toggle" class="icon-btn play" title="播放 / 暂停"></button>
+        <button id="pw-next" class="icon-btn" title="下一首"></button>
+        <button id="pw-mode" class="ghost tiny" title="播放模式">顺序播放</button>
+      </div>
+      <div class="pl-vol">
+        <button id="pw-mute" class="icon-btn small" title="静音 / 恢复"></button>
+        <input id="pw-volume" type="range" min="0" max="100" value="100" step="1">
+      </div>
+    </div>
+    <div class="pwin-right">
+      <div class="pw-panels">
+        <div class="pw-panel">
+          <div id="pw-lyric" class="lyric-box is-empty">（暂无歌词）</div>
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- 登录 / 注册 -->
+<div id="auth-mask" class="modal-mask" hidden>
+  <div class="modal auth-modal">
+    <h3>音乐下载器 <span class="tag">Server</span></h3>
+    <p class="auth-sub muted small">登录可选：登录后文件、音源凭据与偏好保存到你的账号；不登录也能直接使用。</p>
+    <div class="tabs-mini" id="auth-tabs">
+      <button class="active" data-tab="login">登录</button>
+      <button data-tab="register">注册</button>
+    </div>
+    <form id="auth-form" autocomplete="on">
+      <label>用户名
+        <input id="auth-user" name="username" type="text" maxlength="32"
+               placeholder="3~32 位字母、数字或 _ . -" autocomplete="username" required>
+      </label>
+      <label>密码
+        <input id="auth-pass" name="password" type="password" maxlength="128"
+               placeholder="至少 4 位" autocomplete="current-password" required>
+      </label>
+      <label id="auth-confirm-wrap" hidden>确认密码
+        <input id="auth-confirm" type="password" maxlength="128" placeholder="再次输入密码">
+      </label>
+      <button id="auth-submit" class="primary" type="submit">登录</button>
+      <p id="auth-error" class="form-error"></p>
+    </form>
+    <p class="auth-tip">下载文件在服务器暂存，到期自动清理，请及时保存。</p>
+  </div>
+</div>
+
+<!-- 设置 -->
+<div id="settings-mask" class="modal-mask" hidden>
+  <div class="modal modal-lg">
+    <h3>设置</h3>
+    <div class="tabs-mini" id="settings-tabs">
+      <button class="active" data-spanel="music">音乐</button>
+      <button data-spanel="account" class="auth-only">账号 / 音源</button>
+    </div>
+    <div class="modal-body">
+      <div data-spanel="music">
+        <h4 class="sub">下载偏好</h4>
+        <div class="field"><span>默认音源</span><select id="pref-source"></select></div>
+        <div class="field"><span>默认音质</span><select id="pref-level"></select></div>
+        <h4 class="sub">文件处理</h4>
+        <div class="checks">
+          <label><input id="pref-lyric" type="checkbox"> 保存歌词 (.lrc)</label>
+          <label><input id="pref-tag" type="checkbox"> 写入歌曲标签</label>
+          <label><input id="pref-cover" type="checkbox"> 嵌入封面</label>
+          <label><input id="pref-embed-lyric" type="checkbox"> 嵌入歌词</label>
+        </div>
+        <h4 class="sub">存储</h4>
+        <p class="field-note" id="quota-note"></p>
+        <div class="field"><span>文件保留</span><select id="pref-retention"></select></div>
+        <div class="checks">
+          <label><input id="pref-delete-after" type="checkbox"> 导出后立即删除源文件</label>
+        </div>
+        <p class="field-note">勾选多个文件导出时自动打包为 zip；单个文件直接下载原文件。</p>
+      </div>
+      <div data-spanel="account" class="auth-only" hidden>
+        <p class="field-note" id="account-cloud-note"></p>
+        <h4 class="sub">网易云音乐</h4>
+        <p class="field-note">粘贴浏览器 Cookie 以获取会员音质 / 我的歌单；不登录也可下载免费歌曲。</p>
+        <div class="source-block">
+          <div class="source-head">
+            <strong>登录状态</strong>
+            <span id="state-netease" class="state">未登录</span>
+            <button class="ghost tiny" data-qr="netease">扫码登录</button>
+            <button class="ghost tiny" data-logout="netease">退出</button>
+          </div>
+          <textarea id="cookie-netease" rows="3" placeholder="MUSIC_U=...; __csrf=..."></textarea>
+          <button class="primary tiny" data-login="netease">保存并登录</button>
+        </div>
+        <h4 class="sub">QQ 音乐</h4>
+        <div class="source-block">
+          <div class="source-head">
+            <strong>登录状态</strong>
+            <span id="state-qq" class="state">未登录</span>
+            <button class="ghost tiny" data-qr="qq">扫码登录</button>
+            <button class="ghost tiny" data-logout="qq">退出</button>
+          </div>
+          <textarea id="cookie-qq" rows="3" placeholder="uin=...; qm_keyst=..."></textarea>
+          <button class="primary tiny" data-login="qq">保存并登录</button>
+        </div>
+      </div>
+    </div>
+    <div class="modal-foot">
+      <button id="settings-close" class="ghost">关闭</button>
+    </div>
+  </div>
+</div>
+
+<audio id="audio" preload="metadata"></audio>
+<div id="modal-root"></div>
+<div id="menu-root"></div>
+<div id="toast-root"></div>
+
+<script src="app.js"></script>
+</body>
+</html>

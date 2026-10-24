@@ -21,6 +21,10 @@ __pycache__/
 # 断点续传临时文件
 *.part
 
+# Server 版运行时配置与数据（含会话密钥 / 用户数据，禁止提交）
+server/server_config.json
+server/server_data/
+
 # 编辑器 / IDE
 .trae/
 .vscode/
