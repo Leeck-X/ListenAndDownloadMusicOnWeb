@@ -71,15 +71,15 @@
 ## 安装与运行
 
 ```bash
-pip install -r requirements.txt
-python MusicDownloaderWeb.py
+pip install -r web_tk/requirements.txt
+python web_tk/MusicDownloaderWeb.py
 ```
 
 启动后终端输出访问地址（默认 `http://127.0.0.1:8756`）与当前配置摘要，**不会自动打开浏览器**。桌面窗口展示服务状态与实时日志，关闭即最小化至系统托盘，托盘菜单可重新打开窗口 / 打开网页 / 退出。
 
 ## Server 版（公网多用户部署）
 
-仓库同时提供面向公网的多用户服务端，代码位于 `server/`，与本地版仅共享音源与下载核心模块，配置、数据、部署方式完全独立。
+仓库分为两个独立目录：`web_tk/` 为原版（桌面 Web + Tk 界面），`server/` 为公网多用户服务端。两者互不依赖，音源、下载、加密、数据模型等共用模块在 `server/` 内各自保留一份副本，便于独立部署。
 
 ### 与本地版的差异
 
@@ -120,38 +120,41 @@ python server/app.py
 
 ```text
 .
-├── MusicDownloaderWeb.py  # 入口：启动本地服务 + 桌面窗口
-├── webserver.py           # HTTP 服务、路由与静态前端托管
-├── webservice.py          # 业务服务层（检索 / 播放 / 下载任务 / 日志缓冲）
-├── cfgstore.py            # 默认配置、读写、导入导出与字段校正
-├── finisher.py            # 下载完成后动作（消息 / 弹窗 / 打开目录 / 关机）
-├── uipanel.py             # 桌面窗口 + 系统托盘
-├── providers.py           # 音源工厂（网易云 / QQ）
-├── api.py                 # 网易云 Provider
-├── qq_api.py              # QQ 音乐 Provider
-├── downloader.py          # 下载器（进度 / 重试 / 暂停取消 / 标签与歌词）
-├── encrypt.py             # 网易云 weapi 加密
-├── models.py              # 数据模型（Song 等）
-├── web/                   # 前端（原生实现，无构建链）
-│   ├── index.html
-│   ├── app.css
-│   └── app.js
-├── server/                # 公网多用户服务端（独立入口与前端）
-│   ├── app.py             # 入口：监听端口、初始化数据库与清理线程
-│   ├── config.py          # 服务器级配置（server_config.json / 环境变量）
-│   ├── store.py           # SQLite：账号 / 会话 / 偏好 / 文件
-│   ├── accounts.py        # 密码散列、会话令牌、登录限流
-│   ├── context.py         # 每用户独立音源实例池
-│   ├── service.py         # 业务层（检索 / 下载任务 / 配额 / 过期清理）
-│   ├── routes.py          # HTTP 路由、鉴权与文件流式下载
-│   └── web/               # 前端（沿用桌面版界面：登录、检索、任务、文件）
-├── config.json            # 配置与凭证（不入库，运行后自动生成）
-└── requirements.txt       # 依赖清单
+├── web_tk/                # 原版（桌面 Web + Tk 界面）
+│   ├── MusicDownloaderWeb.py  # 入口：启动本地服务 + 桌面窗口
+│   ├── webserver.py           # HTTP 服务、路由与静态前端托管
+│   ├── webservice.py          # 业务服务层（检索 / 播放 / 下载任务 / 日志缓冲）
+│   ├── cfgstore.py            # 默认配置、读写、导入导出与字段校正
+│   ├── finisher.py            # 下载完成后动作（消息 / 弹窗 / 打开目录 / 关机）
+│   ├── uipanel.py             # 桌面窗口 + 系统托盘
+│   ├── providers.py           # 音源工厂（网易云 / QQ）
+│   ├── api.py                 # 网易云 Provider
+│   ├── qq_api.py              # QQ 音乐 Provider
+│   ├── downloader.py          # 下载器（进度 / 重试 / 暂停取消 / 标签与歌词）
+│   ├── encrypt.py             # 网易云 weapi 加密
+│   ├── models.py              # 数据模型（Song 等）
+│   ├── web/                   # 前端（原生实现，无构建链）
+│   │   ├── index.html
+│   │   ├── app.css
+│   │   └── app.js
+│   ├── config.json            # 配置与凭证（不入库，运行后自动生成）
+│   └── requirements.txt       # 依赖清单
+└── server/                # 公网多用户服务端（独立入口、模块副本与前端）
+    ├── app.py             # 入口：监听端口、初始化数据库与清理线程
+    ├── config.py          # 服务器级配置（server_config.json / 环境变量）
+    ├── store.py           # SQLite：账号 / 会话 / 偏好 / 文件
+    ├── accounts.py        # 密码散列、会话令牌、登录限流
+    ├── context.py         # 每用户独立音源实例池
+    ├── service.py         # 业务层（检索 / 下载任务 / 配额 / 过期清理）
+    ├── routes.py          # HTTP 路由、鉴权与文件流式下载
+    ├── api.py / qq_api.py / downloader.py / encrypt.py / models.py  # 与原版同源的模块副本
+    ├── requirements.txt   # 依赖清单
+    └── web/               # 前端（沿用桌面版界面：登录、检索、任务、文件）
 ```
 
 ## 配置说明
 
-程序读取同目录下的 `config.json`，所有配置项均可在 Web 设置页修改，无需手动编辑。
+程序读取同目录下的 `config.json`（即 `web_tk/config.json`），所有配置项均可在 Web 设置页修改，无需手动编辑。
 
 - **服务配置**：`port`（默认 8756，0 表示自动选择空闲端口）、`log_level`；`host` 固定为 `127.0.0.1`，不可修改
 - **用户配置**：`source`、`level` / `encode_type`、`download_dir`、`name_template`、`folder_structure`、`task_folder`、歌词与标签开关、`workers`、`retry`、`skip_existing`、`finish_action`、`status_lyric` / `status_lyric_max` 等

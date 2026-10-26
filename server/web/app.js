@@ -1176,14 +1176,23 @@ async function openSourceLogin() {
       <span class="state" data-state>检查中…</span>
       <button class="primary tiny" data-qr>扫码登录</button>
     </div>
+    <div class="qr-box" id="src-qr" hidden><img id="src-qr-img" alt="二维码">
+      <span id="src-qr-hint" class="muted">正在获取二维码…</span></div>
     <p class="field-note" id="src-login-note"></p>
     <div class="modal-foot"><button class="ghost" data-close>关闭</button></div>
   </div>`;
   document.body.appendChild(mask);
   mask.addEventListener('click', (event) => {
-    if (event.target === mask || event.target.closest('[data-close]')) { mask.remove(); return; }
+    if (event.target === mask || event.target.closest('[data-close]')) {
+      stopQrPoll();
+      mask.remove();
+      return;
+    }
     const qrBtn = event.target.closest('[data-qr]');
-    if (qrBtn) openQrLogin(qrBtn.closest('.src-row').dataset.source, () => refreshSourceRows(mask));
+    if (qrBtn) {
+      /* 点击对应音源行即切换并为该音源重新取码 */
+      startSourceQr(mask, qrBtn.closest('.src-row').dataset.source);
+    }
   });
 
   const note = mask.querySelector('#src-login-note');
@@ -1193,6 +1202,57 @@ async function openSourceLogin() {
       : '当前为访客：凭据保存在访客空间，换浏览器或清理 Cookie 后可能失效。';
   }
   refreshSourceRows(mask);
+  /* 打开音源登录窗口即自动获取当前音源二维码，无需再点一次 */
+  startSourceQr(mask, state.source);
+}
+
+/* 在音源登录窗口内直接展示二维码并轮询登录结果 */
+async function startSourceQr(mask, source) {
+  stopQrPoll();
+  const box = mask.querySelector('#src-qr');
+  const img = mask.querySelector('#src-qr-img');
+  const hint = mask.querySelector('#src-qr-hint');
+  if (!box || !img || !hint) return;
+  mask.dataset.qrSource = source;
+  box.hidden = false;
+  img.hidden = true;
+  hint.textContent = '正在获取二维码…';
+  $$('.src-row', mask).forEach((row) => {
+    row.classList.toggle('on', row.dataset.source === source);
+  });
+  let data;
+  try {
+    data = await api('/api/login/qr/start', { source, type: 'qq' });
+  } catch (err) {
+    hint.textContent = err.message;
+    return;
+  }
+  if (!data.image) {
+    hint.textContent = '二维码获取失败，请重试';
+    return;
+  }
+  img.src = data.image;
+  img.hidden = false;
+  hint.textContent = '请用手机扫码并确认登录';
+  qrTimer = setInterval(async () => {
+    if (mask.dataset.qrSource !== source) return;
+    try {
+      const result = await api('/api/login/qr/poll', { source, identifier: data.identifier });
+      hint.textContent = result.message || '等待扫码…';
+      if (result.event === 'done') {
+        stopQrPoll();
+        toast('登录成功', 'ok');
+        refreshSourceRows(mask);
+        refreshAccountStates();
+        refreshAccount();
+      } else if (result.event === 'timeout' || result.event === 'refuse') {
+        stopQrPoll();
+      }
+    } catch (err) {
+      stopQrPoll();
+      hint.textContent = err.message;
+    }
+  }, 2000);
 }
 
 async function refreshSourceRows(mask) {

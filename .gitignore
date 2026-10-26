@@ -1,17 +1,17 @@
-# 个人配置（含本地 Cookie / 登录凭证，禁止提交）
-config.json
+# 原版（Web/Tk）本地配置（含本地 Cookie / 登录凭证，禁止提交）
+web_tk/config.json
 
-# 下载产物
-downloads/
+# 原版下载产物
+web_tk/downloads/
 
 # 旧版界面本地归档（不上传）
-Tk/
+web_tk/Tk/
 
 # 打包发布目录（exe 通过 GitHub Release 分发）
-release/
-build/
-dist/
-*.spec
+web_tk/release/
+web_tk/build/
+web_tk/dist/
+web_tk/*.spec
 
 # Python 缓存与构建中间产物
 __pycache__/
