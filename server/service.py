@@ -40,9 +40,31 @@ DEFAULT_PREFS = {
     'embed_lyric': True,
     'retention_hours': 72,
     'delete_after_export': False,
+    # 与原版对齐的下载 / 命名 / 界面偏好
+    'name_template': '{artist} - {name}',
+    'folder_structure': 'none',
+    'task_folder': False,
+    'skip_existing': False,
+    'workers': 3,
+    'retry': 3,
+    'finish_action': 'none',
+    'status_lyric': True,
+    'status_lyric_max': 60,
+    'log_level': 'info',
 }
 # 允许的文件保留时长（小时），0 表示使用服务端默认
 RETENTION_CHOICES = (1, 6, 12, 24, 48, 72, 168, 720)
+
+# 文件组织方式（与原版一致）
+FOLDER_STRUCTURES = {
+    'none': '不分文件夹',
+    'artist': '按歌手分文件夹',
+    'album': '按专辑分文件夹',
+    'artist_album': '按歌手 / 专辑分两级',
+}
+# 浏览器环境可行的完成动作：桌面端的打开目录 / 关机 / 弹窗无法在服务端执行
+FINISH_ACTIONS = {'none': '无', 'message': '浏览器通知'}
+LOG_LEVELS = {'debug': 10, 'info': 20, 'warn': 30, 'error': 40}
 
 _RE_NETEASE_SONG = re.compile(r'song\?id=(\d+)')
 _RE_QQ_SONG = re.compile(r'/songDetail/([0-9A-Za-z]+)')
@@ -138,13 +160,15 @@ class DownloadTask:
     """一次下载任务：多首歌、进度聚合、可取消。"""
 
     def __init__(self, task_id: str, user_id: int, songs: list, level: str,
-                 encode_type: str, options: dict, title: str, task_dir: str):
+                 encode_type: str, options: dict, title: str, task_dir: str,
+                 settings: dict = None):
         self.id = task_id
         self.user_id = user_id
         self.songs = songs
         self.level = level
         self.encode_type = encode_type
         self.options = options
+        self.settings = settings or {}
         self.title = title
         self.task_dir = task_dir
         self.source = songs[0].source if songs else 'netease'
@@ -197,6 +221,7 @@ class DownloadTask:
                 'progress': round(self.overall, 4),
                 'speed': int(self.speed),
                 'error': self.error,
+                'finish_action': self.settings.get('finish_action') or 'none',
                 'items': [dict(item) for item in self.items],
                 'logs': list(self.logs),
             }
@@ -216,13 +241,35 @@ class ServerService:
             thread_name_prefix='srv-dl')
         self._quota = int(cfg.get('quota_mb') or 0) * 1024 * 1024
         self._retention = int(cfg.get('retention_hours') or 72) * 3600
+        self._logs = deque(maxlen=2000)
+        self._log_seq = 0
+        self._log_lock = threading.Lock()
         self._stop = threading.Event()
         self._cleaner = threading.Thread(target=self._cleanup_loop, name='srv-cleaner',
                                          daemon=True)
         self._cleaner.start()
 
-    def log(self, level: str, message: str) -> None:
+    def log(self, level: str, message: str, user_id: int = None) -> None:
         print(f'[{time.strftime("%H:%M:%S")}] [{level}] {message}', flush=True)
+        with self._log_lock:
+            self._log_seq += 1
+            self._logs.append({'seq': self._log_seq, 'time': int(time.time()),
+                               'level': level, 'message': message,
+                               'user_id': user_id})
+
+    def logs_since(self, seq: int, level: str, user_id: int) -> list:
+        """增量日志：按级别过滤，只下发系统日志与当前用户自己的日志。"""
+        threshold = LOG_LEVELS.get(level, LOG_LEVELS['info'])
+        with self._log_lock:
+            rows = [row for row in self._logs
+                    if row['seq'] > seq
+                    and LOG_LEVELS.get(row['level'], 0) >= threshold
+                    and (row['user_id'] is None or row['user_id'] == user_id)]
+        return rows[-500:]
+
+    def clear_logs(self) -> None:
+        with self._log_lock:
+            self._logs.clear()
 
     # ---------------- 账号 ----------------
     def guest_user(self) -> dict:
@@ -327,6 +374,22 @@ class ServerService:
             hours = DEFAULT_PREFS['retention_hours']
         if hours not in RETENTION_CHOICES:
             hours = DEFAULT_PREFS['retention_hours']
+        template = str(data.get('name_template') or DEFAULT_PREFS['name_template']).strip()
+        folder = data.get('folder_structure')
+        finish = data.get('finish_action')
+        try:
+            workers = int(data.get('workers'))
+        except (TypeError, ValueError):
+            workers = DEFAULT_PREFS['workers']
+        try:
+            retry = int(data.get('retry'))
+        except (TypeError, ValueError):
+            retry = DEFAULT_PREFS['retry']
+        try:
+            lyric_max = int(data.get('status_lyric_max'))
+        except (TypeError, ValueError):
+            lyric_max = DEFAULT_PREFS['status_lyric_max']
+        log_level = data.get('log_level')
         return {
             'source': source,
             'level': level,
@@ -336,6 +399,16 @@ class ServerService:
             'embed_lyric': bool(data.get('embed_lyric', True)),
             'retention_hours': hours,
             'delete_after_export': bool(data.get('delete_after_export', False)),
+            'name_template': template[:120] or DEFAULT_PREFS['name_template'],
+            'folder_structure': folder if folder in FOLDER_STRUCTURES else 'none',
+            'task_folder': bool(data.get('task_folder', False)),
+            'skip_existing': bool(data.get('skip_existing', False)),
+            'workers': max(1, min(8, workers)),
+            'retry': max(0, min(10, retry)),
+            'finish_action': finish if finish in FINISH_ACTIONS else 'none',
+            'status_lyric': bool(data.get('status_lyric', True)),
+            'status_lyric_max': max(10, min(60, lyric_max)),
+            'log_level': log_level if log_level in LOG_LEVELS else 'info',
         }
 
     def account_state(self, user_id: int, source: str) -> dict:
@@ -443,6 +516,40 @@ class ServerService:
             raise ServiceError(f'获取歌词失败：{exc}')
         return {'lyric': data.get('lyric') or '', 'trans': data.get('trans') or ''}
 
+    def song_detail(self, user_id: int, value: str, source: str = None) -> dict:
+        """按单曲 ID / 链接取详情（右键「查看详情」用）。"""
+        value = (value or '').strip()
+        if not value:
+            raise ServiceError('请输入单曲 ID 或链接')
+        match = parse_song_link(value)
+        if match:
+            source = match[0]
+            value = match[1]
+        source = source or self.prefs(user_id)['source']
+        api = self.contexts.get(user_id).provider(source)
+        try:
+            songs = api.song_by_id(value)
+        except Exception as exc:  # noqa: BLE001
+            raise ServiceError(f'获取歌曲详情失败：{exc}')
+        if not songs:
+            raise ServiceError('未找到该歌曲')
+        return song_to_dict(songs[0], self.prefs(user_id)['level'])
+
+    def probe(self, user_id: int, payload: dict) -> list:
+        """逐档探测一首歌的可用音质，返回每档是否可用及文件信息。"""
+        song = song_from_dict(payload.get('song') or payload)
+        api = self.contexts.get(user_id).provider(song.source)
+        rows = []
+        for value, label in LEVELS_BY_SOURCE.get(song.source, LEVELS_BY_SOURCE['netease']):
+            encode = encode_for_level(song.source, value)
+            try:
+                info = api.song_url(song, value, encode)
+                detail = f"{(info.get('type') or '').upper()} {human_size(info.get('size'))}"
+                rows.append({'value': value, 'label': label, 'ok': True, 'detail': detail})
+            except Exception:  # noqa: BLE001 - 探测失败视为不可用
+                rows.append({'value': value, 'label': label, 'ok': False, 'detail': ''})
+        return rows
+
     # ---------------- 曲库 ----------------
     def meta(self, user_id: int) -> dict:
         usage = self.store.user_usage(user_id)
@@ -454,6 +561,10 @@ class ServerService:
             'sources': [{'value': value, 'label': label} for value, label in SOURCES],
             'levels': {value: [{'value': v, 'label': lab} for v, lab in levels]
                        for value, levels in LEVELS_BY_SOURCE.items()},
+            'folder_structures': [{'value': k, 'label': v}
+                                  for k, v in FOLDER_STRUCTURES.items()],
+            'finish_actions': [{'value': k, 'label': v} for k, v in FINISH_ACTIONS.items()],
+            'log_levels': list(LOG_LEVELS),
             'prefs': self.prefs(user_id),
             'quota': {'used': usage, 'limit': quota,
                       'used_str': human_size(usage) if usage else '0 B',
@@ -556,12 +667,26 @@ class ServerService:
             'embed_cover': bool(payload.get('embed_cover', prefs['embed_cover'])),
             'embed_lyric': bool(payload.get('embed_lyric', prefs['embed_lyric'])),
         }
+        folder = payload.get('folder_structure') or prefs['folder_structure']
+        finish = payload.get('finish_action') or prefs['finish_action']
+        settings = {
+            'name_template': str(payload.get('name_template')
+                                 or prefs['name_template']).strip()
+                             or DEFAULT_PREFS['name_template'],
+            'folder_structure': folder if folder in FOLDER_STRUCTURES else 'none',
+            'task_folder': bool(payload.get('task_folder', prefs['task_folder'])),
+            'skip_existing': bool(payload.get('skip_existing', prefs['skip_existing'])),
+            'workers': prefs['workers'],
+            'retry': prefs['retry'],
+            'finish_action': finish if finish in FINISH_ACTIONS else 'none',
+        }
         task_id = secrets.token_hex(8)
         task_dir = os.path.join(self._user_dir(user_id), task_id)
         os.makedirs(task_dir, exist_ok=True)
         title = (payload.get('title') or '').strip() or f'{len(songs)} 首歌曲'
         task = DownloadTask(task_id, user_id, songs, level,
-                            encode_for_level(source, level), options, title[:80], task_dir)
+                            encode_for_level(source, level), options, title[:80], task_dir,
+                            settings)
         with self._lock:
             self._tasks[task_id] = task
             self._trim_tasks(user_id)
@@ -581,32 +706,35 @@ class ServerService:
     def _user_dir(self, user_id: int) -> str:
         return os.path.join(self.cfg['data_dir'], 'files', str(user_id))
 
-    def _run_task(self, task: DownloadTask) -> None:
+    def _run_task(self, task: DownloadTask, indices=None) -> None:
         task.status = 'running'
+        task.error = ''
         ctx = self.contexts.get(task.user_id)
         api = ctx.provider(task.source)
+        settings = task.settings or {}
         cfg = {
             'download_dir': task.task_dir,
-            'name_template': '{artist} - {name}',
-            'folder_structure': 'none',
-            'task_folder': False,
+            'name_template': settings.get('name_template') or DEFAULT_PREFS['name_template'],
+            'folder_structure': settings.get('folder_structure') or 'none',
+            'task_folder': bool(settings.get('task_folder')),
             'level': task.level,
             'encode_type': task.encode_type,
             'save_lyric': task.options['save_lyric'],
             'embed_tag': task.options['embed_tag'],
             'embed_cover': task.options['embed_cover'],
             'embed_lyric': task.options['embed_lyric'],
-            'skip_existing': False,
-            'retry': 3,
+            'skip_existing': bool(settings.get('skip_existing')),
+            'retry': int(settings.get('retry', 3)),
         }
         downloader = Downloader(api, cfg,
                                 on_log=lambda text: task.log(text),
                                 control=task.control)
-        hub = ProgressHub(len(task.songs), lambda overall, speed: task.set_progress(overall, speed))
+        targets = list(range(len(task.songs))) if indices is None else list(indices)
+        hub = ProgressHub(len(targets), lambda overall, speed: task.set_progress(overall, speed))
 
         def worker(index: int) -> None:
             song = task.songs[index]
-            task.set_item(index, status='running')
+            task.set_item(index, status='running', ratio=0.0, error='')
             if task.control.cancelled:
                 task.set_item(index, status='cancelled')
                 hub.finish(index)
@@ -634,9 +762,9 @@ class ServerService:
 
         try:
             with ThreadPoolExecutor(
-                    max_workers=max(1, int(self.cfg.get('download_workers') or 3)),
+                    max_workers=max(1, int(settings.get('workers') or 3)),
                     thread_name_prefix='srv-song') as pool:
-                list(pool.map(worker, range(len(task.songs))))
+                list(pool.map(worker, targets))
         finally:
             downloader.close()
             hub.final()
@@ -645,11 +773,12 @@ class ServerService:
             task.status = 'cancelled'
             task.set_progress(0.0, 0.0)
             self._purge_task_files(task.id)
-            self.log('warn', f'任务 {task.id} 已取消')
+            self.log('warn', f'任务 {task.id} 已取消', task.user_id)
         else:
             failed = sum(1 for item in task.items if item['status'] == 'failed')
             if failed == 0:
                 task.status = 'done'
+                task.set_progress(1.0, 0.0)
             elif failed == len(task.items):
                 task.status = 'failed'
                 task.error = '全部歌曲下载失败'
@@ -658,7 +787,8 @@ class ServerService:
                 task.error = f'{failed} 首下载失败'
             if task.quota_hit:
                 task.error = '存储空间已满，部分歌曲未下载'
-            self.log('info', f'任务 {task.id} 结束：成功 {len(task.items) - failed}/{len(task.items)}')
+            self.log('info', f'任务 {task.id} 结束：成功 {len(task.items) - failed}/{len(task.items)}',
+                     task.user_id)
         task.finished = time.time()
 
     def _register_file(self, task: DownloadTask, path: str, song: Song) -> str:
@@ -680,6 +810,38 @@ class ServerService:
             task = self._tasks.get(task_id)
         if not task or task.user_id != user_id:
             raise ServiceError('任务不存在')
+        if action == 'pause':
+            if task.status not in ('queued', 'running'):
+                raise ServiceError('当前状态无法暂停')
+            task.control.pause()
+            task.status = 'paused'
+            return task.snapshot()
+        if action == 'resume':
+            if task.status != 'paused':
+                raise ServiceError('任务未暂停')
+            task.control.resume()
+            task.status = 'running'
+            return task.snapshot()
+        if action == 'retry':
+            if task.status in ('queued', 'running', 'paused'):
+                raise ServiceError('任务还在进行中，无法重试')
+            if task.status == 'cancelled':
+                retry_indices = list(range(len(task.items)))
+            else:
+                retry_indices = [index for index, item in enumerate(task.items)
+                                 if item['status'] in ('failed', 'cancelled')]
+            if not retry_indices:
+                raise ServiceError('没有需要重试的歌曲')
+            for index in retry_indices:
+                task.set_item(index, status='pending', ratio=0.0, error='')
+            task.control = Control()
+            task.status = 'queued'
+            task.error = ''
+            task.finished = 0.0
+            task.quota_hit = False
+            self._pool.submit(self._run_task, task, retry_indices)
+            self.log('info', f'任务 {task.id} 重试 {len(retry_indices)} 首', task.user_id)
+            return task.snapshot()
         if action == 'cancel':
             task.control.cancel()
             return task.snapshot()

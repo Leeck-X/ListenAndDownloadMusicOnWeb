@@ -74,6 +74,8 @@
           <button id="pl-toggle" class="icon-btn play" title="播放 / 暂停"></button>
           <button id="pl-next" class="icon-btn" title="下一首"></button>
           <button id="pl-mode" class="ghost tiny" title="播放模式">顺序播放</button>
+          <span class="spacer"></span>
+          <button id="pl-list" class="icon-btn" title="播放列表"></button>
         </div>
         <div class="pl-vol">
           <button id="pl-mute" class="icon-btn small" title="静音 / 恢复"></button>
@@ -88,10 +90,27 @@
   </section>
 
   <footer class="statusbar">
+    <div id="status-lyric" class="status-lyric" hidden><span id="status-lyric-inner" class="status-lyric-inner"></span></div>
     <div class="progress"><div class="bar" id="global-bar"></div></div>
-    <button id="global-pct" class="status-pct" title="当前任务进度">—</button>
+    <button id="global-pct" class="status-pct" title="点击清空进度">—</button>
   </footer>
 </div>
+
+<!-- 左缘悬浮岛：播放列表 -->
+<div class="edge-hot left" id="hot-left" title="鼠标靠近左边缘唤出播放列表"></div>
+
+<aside id="island-queue" class="island" data-kind="queue" hidden>
+  <div class="island-head" data-drag>
+    <b>播放列表</b>
+    <span class="muted small" id="queue-count"></span>
+    <span class="spacer"></span>
+    <button class="icon-btn island-close" data-icon="close" title="收起"></button>
+  </div>
+  <div class="island-body">
+    <p class="muted small">单击条目切换当前播放 · 右键更多操作</p>
+    <div id="queue-list" class="task-list empty">播放列表为空</div>
+  </div>
+</aside>
 
 <!-- 下载任务窗口 -->
 <div id="tasks-window" class="pwin tasks-win" hidden>
@@ -154,9 +173,20 @@
       </div>
     </div>
     <div class="pwin-right">
+      <div class="tabs-mini pw-tabs">
+        <button class="active" data-pw-tab="lyric">歌词</button>
+        <button data-pw-tab="queue">播放列表</button>
+        <button data-pw-tab="info">歌曲信息</button>
+      </div>
       <div class="pw-panels">
-        <div class="pw-panel">
+        <div class="pw-panel" data-pw-panel="lyric">
           <div id="pw-lyric" class="lyric-box is-empty">（暂无歌词）</div>
+        </div>
+        <div class="pw-panel" data-pw-panel="queue" hidden>
+          <div id="pw-queue" class="task-list empty">播放列表为空</div>
+        </div>
+        <div class="pw-panel" data-pw-panel="info" hidden>
+          <div id="pw-info" class="pw-info"></div>
         </div>
       </div>
     </div>
@@ -198,19 +228,33 @@
     <div class="tabs-mini" id="settings-tabs">
       <button class="active" data-spanel="music">音乐</button>
       <button data-spanel="account" class="auth-only">账号 / 音源</button>
+      <button data-spanel="logs">日志</button>
     </div>
     <div class="modal-body">
       <div data-spanel="music">
         <h4 class="sub">下载偏好</h4>
         <div class="field"><span>默认音源</span><select id="pref-source"></select></div>
         <div class="field"><span>默认音质</span><select id="pref-level"></select></div>
+        <div class="field"><span>命名模板</span><input id="pref-template" type="text" placeholder="{artist} - {name}"></div>
+        <div class="field"><span>文件组织</span><select id="pref-folder"></select></div>
         <h4 class="sub">文件处理</h4>
         <div class="checks">
           <label><input id="pref-lyric" type="checkbox"> 保存歌词 (.lrc)</label>
           <label><input id="pref-tag" type="checkbox"> 写入歌曲标签</label>
           <label><input id="pref-cover" type="checkbox"> 嵌入封面</label>
           <label><input id="pref-embed-lyric" type="checkbox"> 嵌入歌词</label>
+          <label><input id="pref-skip" type="checkbox"> 跳过已存在</label>
+          <label><input id="pref-task-folder" type="checkbox"> 按任务分文件夹</label>
         </div>
+        <h4 class="sub">下载</h4>
+        <div class="field"><span>并发数（1~8）</span><input id="pref-workers" type="number" min="1" max="8" step="1"></div>
+        <div class="field"><span>失败重试次数</span><input id="pref-retry" type="number" min="0" max="10" step="1"></div>
+        <div class="field"><span>完成后动作</span><select id="pref-finish"></select></div>
+        <h4 class="sub">底部状态栏</h4>
+        <div class="checks">
+          <label><input id="pref-status-lyric" type="checkbox"> 播放时在状态栏显示歌词</label>
+        </div>
+        <div class="field"><span>歌词最大宽度（10~60%）</span><input id="pref-status-lyric-max" type="number" min="10" max="60" step="5"></div>
         <h4 class="sub">存储</h4>
         <p class="field-note" id="quota-note"></p>
         <div class="field"><span>文件保留</span><select id="pref-retention"></select></div>
@@ -245,8 +289,24 @@
           <button class="primary tiny" data-login="qq">保存并登录</button>
         </div>
       </div>
+      <div data-spanel="logs" hidden>
+        <div class="list-head">
+          <label class="muted small">级别
+            <select id="log-level">
+              <option value="debug">debug</option>
+              <option value="info" selected>info</option>
+              <option value="warn">warn</option>
+              <option value="error">error</option>
+            </select>
+          </label>
+          <span class="spacer"></span>
+          <button id="btn-clear-log" class="ghost tiny">清空日志</button>
+        </div>
+        <div class="log-wrap"><div id="log-list" class="log-list empty">暂无日志</div></div>
+      </div>
     </div>
     <div class="modal-foot">
+      <span class="spacer"></span>
       <button id="settings-close" class="ghost">关闭</button>
     </div>
   </div>

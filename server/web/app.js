@@ -6,7 +6,7 @@ const $ = (id) => document.getElementById(id);
 const $$ = (sel, root) => Array.from((root || document).querySelectorAll(sel));
 
 const STATUS_CN = {
-  queued: '排队中', running: '下载中', done: '已完成',
+  queued: '排队中', running: '下载中', paused: '已暂停', done: '已完成',
   partial: '部分失败', failed: '失败', cancelled: '已取消',
 };
 const ITEM_CN = { pending: '待下载', running: '下载中', done: '完成', failed: '失败', cancelled: '已取消' };
@@ -36,7 +36,7 @@ const FILLED_ICONS = new Set(['play', 'pause', 'prev', 'next']);
 const ICON_IDS = {
   'btn-download': 'download', 'btn-tasks': 'tasks',
   'btn-files': 'folder', 'btn-settings': 'gear', 'btn-source': 'user',
-  'pl-prev': 'prev', 'pl-next': 'next',
+  'pl-prev': 'prev', 'pl-next': 'next', 'pl-list': 'list',
   'pw-prev': 'prev', 'pw-next': 'next',
 };
 const SCOPE_ICONS = { search: 'search', link: 'list', liked: 'heart' };
@@ -79,6 +79,9 @@ const state = {
   lyric: [], lyricKey: '',
   tasks: [], files: [], filesSelected: new Set(), expanded: new Set(),
   pollTimer: null, finishedIds: new Set(),
+  queueOpen: false, pwOpen: false, pwTab: 'lyric', settingsTab: 'music',
+  logSeq: 0, logLevel: 'info', dismissedTask: null, logTimer: null,
+  lastStatus: {},
 };
 
 /* ==================== 基础工具 ==================== */
@@ -116,6 +119,43 @@ function fmtETA(seconds) {
   if (s < 3600) return `${Math.round(s / 60)} 分钟`;
   if (s < 86400) return `${Math.round(s / 3600)} 小时`;
   return `${Math.round(s / 86400)} 天`;
+}
+
+function labelOf(options, value) {
+  const hit = (options || []).find((item) => item.value === value);
+  return hit ? hit.label : value;
+}
+
+function fillSelect(sel, options, value) {
+  if (!sel) return;
+  sel.innerHTML = (options || []).map((opt) => (
+    `<option value="${esc(opt.value)}">${esc(opt.label)}</option>`)).join('');
+  if (value !== undefined) sel.value = value;
+}
+
+/* 编码随音质档位推导：无损及以上 FLAC，其余 MP3（与后端一致） */
+function encodeOf(source, level) {
+  return ['lossless', 'hires'].includes(level) ? 'flac' : 'mp3';
+}
+
+/* 通用弹窗：与原版一致的标题 / 内容 / 底部按钮结构 */
+function modal(title, bodyHtml, footButtons) {
+  const mask = document.createElement('div');
+  mask.className = 'modal-mask';
+  mask.innerHTML = `<div class="modal"><h3>${esc(title)}</h3>
+    <div class="modal-body">${bodyHtml}</div><div class="modal-foot"></div></div>`;
+  const foot = mask.querySelector('.modal-foot');
+  (footButtons || []).forEach((btn) => {
+    const node = document.createElement('button');
+    node.textContent = btn.label;
+    if (btn.primary) node.className = 'primary';
+    node.addEventListener('click', () => btn.onClick(close, mask));
+    foot.appendChild(node);
+  });
+  function close() { mask.remove(); }
+  mask.addEventListener('click', (event) => { if (event.target === mask) close(); });
+  $('modal-root').appendChild(mask);
+  return { mask, close, body: mask.querySelector('.modal-body') };
 }
 
 async function api(path, payload, method) {
@@ -160,7 +200,7 @@ function paintIcons() {
     const slot = btn.querySelector('.icon-slot');
     if (slot && SCOPE_ICONS[btn.dataset.scope]) slot.innerHTML = icon(SCOPE_ICONS[btn.dataset.scope], 17);
   });
-  [['tasks-close', 16], ['files-close', 16], ['pw-close', 16]].forEach(([id, size]) => {
+  [['tasks-close', 16], ['files-close', 16], ['pw-close', 16], ['island-close', 16]].forEach(([id, size]) => {
     if ($(id)) $(id).innerHTML = icon('close', size);
   });
   paintModeButton();
@@ -245,6 +285,14 @@ async function bootstrap() {
   initVolume();
   bind();
   bindMenuGuards();
+  bindIslands();
+  /* 页面重新可见或网络恢复时立即重新拉取任务，避免退避期间长时间不刷新 */
+  document.addEventListener('visibilitychange', () => {
+    if (!document.hidden && state.appReady) startPolling();
+  });
+  window.addEventListener('online', () => {
+    if (state.appReady) startPolling();
+  });
   try {
     const data = await api('/api/auth/me');
     state.user = data.user;
@@ -266,6 +314,7 @@ async function enterApp() {
     if (state.authEnabled) showAuth();
     return;
   }
+  state.appReady = true;
   startPolling();
   loadFiles();
 }
@@ -315,6 +364,19 @@ function syncPrefs() {
   $('pref-tag').checked = !!prefs.embed_tag;
   $('pref-cover').checked = !!prefs.embed_cover;
   $('pref-embed-lyric').checked = !!prefs.embed_lyric;
+  $('pref-template').value = prefs.name_template || '{artist} - {name}';
+  fillSelect($('pref-folder'), (state.meta && state.meta.folder_structures) || [],
+    prefs.folder_structure || 'none');
+  $('pref-skip').checked = !!prefs.skip_existing;
+  $('pref-task-folder').checked = !!prefs.task_folder;
+  $('pref-workers').value = prefs.workers || 3;
+  $('pref-retry').value = prefs.retry == null ? 3 : prefs.retry;
+  fillSelect($('pref-finish'), (state.meta && state.meta.finish_actions) || [],
+    prefs.finish_action || 'none');
+  $('pref-status-lyric').checked = prefs.status_lyric !== false;
+  $('pref-status-lyric-max').value = prefs.status_lyric_max || 60;
+  state.logLevel = prefs.log_level || 'info';
+  if ($('log-level')) $('log-level').value = state.logLevel;
 
   const retention = $('pref-retention');
   retention.innerHTML = '';
@@ -323,6 +385,7 @@ function syncPrefs() {
   });
   retention.value = String(prefs.retention_hours || 72);
   $('pref-delete-after').checked = !!prefs.delete_after_export;
+  updateStatusLyric(audio.currentTime || 0);
   paintSourceSwitch();
 }
 
@@ -690,33 +753,72 @@ function togglePickAll() {
   renderSongs();
 }
 
-/* ==================== 下载 ==================== */
-async function submitDownload(level, only) {
-  const songs = (only && only.length)
-    ? only.slice()
-    : visibleSongs().filter((song) => state.selected.has(song.key));
-  if (!songs.length) { toast('请先勾选要下载的歌曲', 'error'); return; }
+/* ==================== 下载选项（与原版一致） ==================== */
+function openDownloadDialog(songs) {
+  if (!songs || !songs.length) { toast('请先选择歌曲', 'error'); return; }
   const prefs = state.prefs || {};
-  const button = $('btn-download-sel');
-  button.disabled = true;
+  const source = songs[0].source || state.source;
+  const html = `
+    <p class="muted">共 ${songs.length} 首，将按下方选项加入下载队列</p>
+    <label class="field">音质<select id="dl-level"></select></label>
+    <label class="field">编码格式<input id="dl-encode" type="text" readonly></label>
+    <label class="field">完成后<select id="dl-finish"></select></label>
+    <div class="checks">
+      <label><input id="dl-lyric" type="checkbox">保存 .lrc 歌词</label>
+      <label><input id="dl-tag" type="checkbox">写入标签</label>
+      <label><input id="dl-cover" type="checkbox">嵌入封面</label>
+      <label><input id="dl-embed-lyric" type="checkbox">歌词写入标签</label>
+      <label><input id="dl-skip" type="checkbox">跳过已存在</label>
+    </div>`;
+  const m = modal('下载选项', html, [
+    { label: '开始下载', primary: true, onClick: (close) => submitDownload(close, songs) },
+    { label: '取消', onClick: (close) => close() },
+  ]);
+  const levelSel = m.body.querySelector('#dl-level');
+  const encInput = m.body.querySelector('#dl-encode');
+  const levels = levelsOf(source);
+  fillSelect(levelSel, levels, prefs.level);
+  if (!levels.some((item) => item.value === levelSel.value)) {
+    levelSel.value = levels[0] ? levels[0].value : 'exhigh';
+  }
+  const syncEncode = () => { encInput.value = encodeOf(source, levelSel.value).toUpperCase(); };
+  levelSel.addEventListener('change', syncEncode);
+  syncEncode();
+  m.body.querySelector('#dl-lyric').checked = !!prefs.save_lyric;
+  m.body.querySelector('#dl-tag').checked = !!prefs.embed_tag;
+  m.body.querySelector('#dl-cover').checked = !!prefs.embed_cover;
+  m.body.querySelector('#dl-embed-lyric').checked = !!prefs.embed_lyric;
+  m.body.querySelector('#dl-skip').checked = !!prefs.skip_existing;
+  fillSelect(m.body.querySelector('#dl-finish'),
+    (state.meta && state.meta.finish_actions) || [{ value: 'none', label: '无' }],
+    prefs.finish_action);
+}
+
+async function submitDownload(close, songs) {
+  const root = $('modal-root').lastElementChild;
+  if (!root) return;
+  const options = {
+    save_lyric: root.querySelector('#dl-lyric').checked,
+    embed_tag: root.querySelector('#dl-tag').checked,
+    embed_cover: root.querySelector('#dl-cover').checked,
+    embed_lyric: root.querySelector('#dl-embed-lyric').checked,
+    skip_existing: root.querySelector('#dl-skip').checked,
+    finish_action: root.querySelector('#dl-finish').value,
+  };
   try {
     await api('/api/download', {
       songs,
-      level: level || prefs.level,
+      level: root.querySelector('#dl-level').value,
       title: state.title || `${songs.length} 首歌曲`,
-      source: state.source,
-      save_lyric: !!prefs.save_lyric,
-      embed_tag: !!prefs.embed_tag,
-      embed_cover: !!prefs.embed_cover,
-      embed_lyric: !!prefs.embed_lyric,
+      source: songs[0].source || state.source,
+      ...options,
     });
-    toast(`已提交任务：${songs.length} 首`, 'ok');
+    if (typeof close === 'function') close();
+    toast(`任务已创建：${songs.length} 首`, 'ok');
     openTasks();
     await refreshTasks(true);
   } catch (err) {
     toast(err.message, 'error');
-  } finally {
-    button.disabled = false;
   }
 }
 
@@ -729,7 +831,8 @@ function closeMenu() {
 
 function openDownloadMenu(button) {
   closeMenu();
-  const songs = visibleSongs().filter((song) => state.selected.has(song.key));
+  const allSongs = visibleSongs();
+  const songs = allSongs.filter((song) => state.selected.has(song.key));
   const prefs = state.prefs || {};
   const sources = (state.meta.sources || []).map((item) => (
     `<button class="menu-item${item.value === state.source ? ' on' : ''}"
@@ -745,7 +848,9 @@ function openDownloadMenu(button) {
     <div class="menu-sep"></div><div class="menu-label">音质</div>${levels}
     <div class="menu-sep"></div>
     <button class="menu-item" data-act="go"${songs.length ? '' : ' disabled'}>
-      下载选中${songs.length ? ` (${songs.length} 首)` : '（未勾选）'}</button>`;
+      下载选中${songs.length ? ` (${songs.length} 首)` : '（未勾选）'}</button>
+    <button class="menu-item" data-act="go-all"${allSongs.length ? '' : ' disabled'}>
+      下载全部${allSongs.length ? ` (${allSongs.length} 首)` : '（列表为空）'}</button>`;
   document.body.appendChild(menu);
   const rect = button.getBoundingClientRect();
   menu.style.top = `${rect.bottom + 6}px`;
@@ -766,7 +871,9 @@ function openDownloadMenu(button) {
       await savePrefs({ level: item.dataset.value });
       toast(`音质已切换：${item.textContent.trim()}`, 'ok');
     } else if (act === 'go') {
-      submitDownload(prefs.level);
+      openDownloadDialog(songs);
+    } else if (act === 'go-all') {
+      openDownloadDialog(allSongs);
     }
   });
 }
@@ -840,34 +947,266 @@ async function copyText(text, label) {
   toast(`已复制${label}`, 'ok');
 }
 
-function appendToQueue(song) {
-  state.queue.push(song);
-  toast('已加入播放列表', 'ok');
+/* ==================== 歌曲详情（可用音质 / 歌词 / 翻译） ==================== */
+async function openDetail(song) {
+  const html = `
+    <div class="detail-top">
+      ${song.cover ? `<img class="detail-cover" src="${esc(song.cover)}">` : '<span class="detail-cover"></span>'}
+      <div class="detail-info">
+        <h3>${esc(song.name)}</h3>
+        <p class="muted">${esc(song.artists)} · ${esc(song.album)}</p>
+        <p class="muted">时长 ${esc(song.duration_str)} · 音源 ${esc(labelOf((state.meta || {}).sources, song.source))} · 大小≈ ${esc(song.size)}</p>
+      </div>
+    </div>
+    <div class="tabs-mini" data-tabs>
+      <button class="active" data-t="probe">可用音质</button>
+      <button data-t="lyric">歌词</button>
+      <button data-t="trans">翻译</button>
+    </div>
+    <div data-panel="probe" class="muted">探测中…</div>
+    <div data-panel="lyric" class="lyric-box" hidden></div>
+    <div data-panel="trans" class="lyric-box" hidden></div>`;
+  const m = modal('歌曲详情', html, [
+    { label: '播放', primary: true, onClick: (close) => { close(); playFromList(song.key); } },
+    { label: '下载', onClick: (close) => { close(); openDownloadDialog([song]); } },
+    { label: '关闭', onClick: (close) => close() },
+  ]);
+  m.body.querySelector('[data-tabs]').addEventListener('click', (event) => {
+    const btn = event.target.closest('button[data-t]');
+    if (!btn) return;
+    $$('[data-tabs] button', m.body).forEach((node) => node.classList.toggle('active', node === btn));
+    ['probe', 'lyric', 'trans'].forEach((name) => {
+      m.body.querySelector(`[data-panel="${name}"]`).hidden = name !== btn.dataset.t;
+    });
+  });
+  try {
+    const rows = await api('/api/probe', { song });
+    m.body.querySelector('[data-panel="probe"]').innerHTML = rows.map((row) => (
+      `<div>${esc(row.label)}：${row.ok ? '可用（' + esc(row.detail) + '）' : '不可用'}</div>`
+    )).join('');
+  } catch (err) {
+    m.body.querySelector('[data-panel="probe"]').textContent = '探测失败：' + err.message;
+  }
+  try {
+    const data = await api('/api/lyric', { song });
+    m.body.querySelector('[data-panel="lyric"]').textContent = data.lyric || '（无歌词）';
+    m.body.querySelector('[data-panel="trans"]').textContent = data.trans || '（无翻译）';
+  } catch (err) {
+    m.body.querySelector('[data-panel="lyric"]').textContent = '歌词获取失败：' + err.message;
+  }
 }
 
-function addNextPlay(song) {
-  const at = state.playIndex >= 0 ? state.playIndex + 1 : state.queue.length;
+/* ==================== 左缘悬浮岛：播放列表 ==================== */
+const PANEL_STORE = 'nmd.panelPos';
+
+function openQueue() {
+  const el = $('island-queue');
+  if (!el) return;
+  state.queueOpen = true;
+  el.hidden = false;
+  requestAnimationFrame(() => el.classList.add('open'));
+  renderQueue();
+}
+
+function closeQueue() {
+  const el = $('island-queue');
+  if (!el) return;
+  state.queueOpen = false;
+  el.classList.remove('open');
+  setTimeout(() => { if (!state.queueOpen) el.hidden = true; }, 220);
+}
+
+function toggleQueue() { state.queueOpen ? closeQueue() : openQueue(); }
+
+/* 面板位置记忆（左侧岛 / 播放器窗口 / 下载任务窗口共用） */
+function applyPanelPos(el, key) {
+  if (!el) return;
+  try {
+    const pos = JSON.parse(localStorage.getItem(PANEL_STORE) || '{}')[key];
+    if (!pos) return;
+    el.style.left = pos.x + 'px';
+    el.style.top = pos.y + 'px';
+    el.style.right = 'auto';
+    el.style.bottom = 'auto';
+  } catch (err) { /* 使用默认位置 */ }
+}
+
+function savePanelPos(el, key) {
+  try {
+    const all = JSON.parse(localStorage.getItem(PANEL_STORE) || '{}');
+    all[key] = { x: el.offsetLeft, y: el.offsetTop };
+    localStorage.setItem(PANEL_STORE, JSON.stringify(all));
+  } catch (err) { /* 忽略 */ }
+}
+
+/* 按住标题栏拖动面板 */
+function bindPanelDrag(el, key) {
+  const head = el && el.querySelector('[data-drag]');
+  if (!head) return;
+  head.addEventListener('mousedown', (event) => {
+    if (event.target.closest('.icon-btn')) return;
+    const rect = el.getBoundingClientRect();
+    const sx = event.clientX;
+    const sy = event.clientY;
+    let moved = false;
+    el.style.right = 'auto';
+    el.style.bottom = 'auto';
+    el.style.left = rect.left + 'px';
+    el.style.top = rect.top + 'px';
+    document.body.classList.add('island-drag');
+    const onMove = (mv) => {
+      if (Math.abs(mv.clientX - sx) > 3 || Math.abs(mv.clientY - sy) > 3) moved = true;
+      el.style.left = Math.max(4, Math.min(window.innerWidth - 90, rect.left + mv.clientX - sx)) + 'px';
+      el.style.top = Math.max(4, Math.min(window.innerHeight - 46, rect.top + mv.clientY - sy)) + 'px';
+    };
+    const onUp = () => {
+      document.removeEventListener('mousemove', onMove);
+      document.removeEventListener('mouseup', onUp);
+      document.body.classList.remove('island-drag');
+      if (moved) savePanelPos(el, key);
+    };
+    document.addEventListener('mousemove', onMove);
+    document.addEventListener('mouseup', onUp);
+    event.preventDefault();
+  });
+}
+
+function bindIslands() {
+  const island = $('island-queue');
+  if (!island) return;
+  applyPanelPos(island, 'queue');
+  bindPanelDrag(island, 'queue');
+  island.querySelector('.island-close').addEventListener('click', closeQueue);
+  $('hot-left').addEventListener('mouseenter', openQueue);
+  document.addEventListener('mousedown', (event) => {
+    if (!state.queueOpen) return;
+    if (event.target.closest('#island-queue, .edge-hot, #menu-root')) return;
+    closeQueue();
+  });
+  bindQueueList($('queue-list'));
+  bindQueueList($('pw-queue'));
+}
+
+/* ==================== 播放列表：只能由用户显式添加 ==================== */
+function queueIndexOf(key) { return state.queue.findIndex((song) => song.key === key); }
+
+/* 在指定位置插入，插入点在当前曲之前时同步后移播放索引 */
+function insertQueue(song, at) {
   state.queue.splice(at, 0, song);
-  toast('已安排下一首播放', 'ok');
+  if (state.playIndex >= at) state.playIndex += 1;
+  renderQueue();
+  return at;
+}
+
+function appendToQueue(song) {
+  const existing = queueIndexOf(song.key);
+  if (existing >= 0) { toast('已在播放列表中', ''); return existing; }
+  const at = insertQueue(song, state.queue.length);
+  toast(`已添加到播放列表：${song.name}`, 'ok');
+  return at;
+}
+
+/* 下一首播放：已存在则先摘出，再插到当前曲之后 */
+function addNextPlay(song) {
+  const existing = queueIndexOf(song.key);
+  if (existing >= 0) {
+    state.queue.splice(existing, 1);
+    if (existing < state.playIndex) state.playIndex -= 1;
+  }
+  const at = state.playIndex >= 0 ? state.playIndex + 1 : state.queue.length;
+  insertQueue(song, at);
+  toast(`已加入下一首播放：${song.name}`, 'ok');
+}
+
+function bindQueueList(box) {
+  if (!box) return;
+  box.addEventListener('click', (event) => {
+    const del = event.target.closest('.q-del');
+    if (del) { removeFromQueue(Number(del.closest('.queue-item').dataset.i)); return; }
+    const item = event.target.closest('.queue-item[data-i]');
+    if (item) playIndex(Number(item.dataset.i));
+  });
+  box.addEventListener('contextmenu', (event) => {
+    const item = event.target.closest('.queue-item[data-i]');
+    if (!item) return;
+    event.preventDefault();
+    const index = Number(item.dataset.i);
+    showMenu([
+      { label: '播放这首', onClick: () => playIndex(index) },
+      { label: '下一首播放', onClick: () => addNextPlay(state.queue[index]) },
+      { separator: true },
+      { label: '从播放列表移除', onClick: () => removeFromQueue(index) },
+      { label: '清空播放列表', onClick: () => clearQueue() },
+    ], { x: event.clientX, y: event.clientY });
+  });
+}
+
+function removeFromQueue(index) {
+  if (index < 0 || index >= state.queue.length) return;
+  const wasPlaying = index === state.playIndex;
+  state.queue.splice(index, 1);
+  if (!state.queue.length) { clearQueue(); return; }
+  if (index < state.playIndex) state.playIndex -= 1;
+  else if (wasPlaying) state.playIndex = Math.min(index, state.queue.length - 1);
+  renderQueue();
+  if (wasPlaying) playIndex(state.playIndex);
+  else syncPlayerTexts();
+}
+
+function clearQueue() {
+  state.queue = [];
+  state.playIndex = -1;
+  state.playing = false;
+  state.lyric = [];
+  state.lyricKey = '';
+  audio.pause();
+  audio.removeAttribute('src');
+  resetLyric();
+  renderQueue();
+  renderPwInfo();
+  syncPlayerTexts();
+  syncProgress();
+}
+
+/* 播放列表渲染：左缘岛与播放器窗口内的列表共用同一份数据 */
+function renderQueue() {
+  const html = state.queue.length ? state.queue.map((song, index) => `
+    <div class="queue-item${index === state.playIndex ? ' playing' : ''}" data-i="${index}">
+      <span class="q-idx">${index + 1}</span>
+      <span class="q-name" title="${esc(song.name)}">${esc(song.name)}</span>
+      <span class="q-artist" title="${esc(song.artists)}">${esc(song.artists)}</span>
+      <span class="q-dur">${esc(song.duration_str)}</span>
+      <button class="q-del" title="从播放列表移除">×</button>
+    </div>`).join('') : '';
+
+  ['queue-list', 'pw-queue'].forEach((id) => {
+    const box = $(id);
+    if (!box) return;
+    if (!html) { box.classList.add('empty'); box.textContent = '播放列表为空'; return; }
+    box.classList.remove('empty');
+    box.innerHTML = html;
+  });
+  const count = $('queue-count');
+  if (count) count.textContent = state.queue.length ? `${state.queue.length} 首` : '';
 }
 
 /* 歌曲行右键菜单：播放 / 下载 / 勾选 / 复制（对齐桌面版） */
 function openSongMenu(song, x, y) {
-  const prefs = state.prefs || {};
   const picked = visibleSongs().filter((item) => state.selected.has(item.key));
   const selected = state.selected.has(song.key);
   const playing = currentSong() && currentSong().key === song.key;
   showMenu([
     { label: playing ? '暂停' : '播放此曲',
-      onClick: () => (playing ? togglePlay() : playSongByKey(song.key)) },
+      onClick: () => (playing ? togglePlay() : playFromList(song.key)) },
     { label: '下一首播放', onClick: () => addNextPlay(song) },
     { label: '添加到播放列表', onClick: () => appendToQueue(song) },
     { separator: true },
-    { label: '下载此曲', onClick: () => submitDownload(prefs.level, [song]) },
+    { label: '查看详情', onClick: () => openDetail(song) },
+    { label: '下载此曲', onClick: () => openDownloadDialog([song]) },
     { separator: true },
     { label: selected ? '取消选中' : '选中此曲', onClick: () => togglePick(song.key) },
     { label: `下载已选（${picked.length} 首）`, disabled: !picked.length,
-      onClick: () => submitDownload(prefs.level) },
+      onClick: () => openDownloadDialog(picked) },
     { separator: true },
     { label: '复制歌名', onClick: () => copyText(song.name, '歌名') },
     { label: '复制「歌手 - 歌名」',
@@ -889,13 +1228,20 @@ function stopPolling() {
 
 async function pollTick() {
   state.pollTimer = null;
+  let failed = false;
   try {
     await refreshTasks();
+    state.pollFailures = 0;
   } catch (err) {
-    /* 轮询失败静默重试 */
+    /* 服务短暂不可用（如后端重启）时静默退避，恢复后自动回到正常轮询 */
+    failed = true;
+    state.pollFailures = (state.pollFailures || 0) + 1;
   }
   const running = state.tasks.some((task) => task.status === 'queued' || task.status === 'running');
-  state.pollTimer = setTimeout(pollTick, running ? 1200 : 4000);
+  let delay = running ? 1200 : 4000;
+  if (failed) delay = Math.min(30000, 1500 * Math.pow(2, Math.min(state.pollFailures, 5)));
+  else if (document.hidden) delay = 8000;
+  state.pollTimer = setTimeout(pollTick, delay);
 }
 
 async function refreshTasks(force) {
@@ -903,17 +1249,50 @@ async function refreshTasks(force) {
   state.tasks = data.items || [];
   let finishedNow = false;
   state.tasks.forEach((task) => {
-    const finished = !['queued', 'running'].includes(task.status);
+    const finished = !['queued', 'running', 'paused'].includes(task.status);
     if (finished && !state.finishedIds.has(task.id)) {
       state.finishedIds.add(task.id);
       finishedNow = true;
     }
   });
+  notifyTaskEnds();
   renderTasks(force);
   renderGlobalProgress();
   const dot = $('btn-tasks').querySelector('.dot');
-  if (dot) dot.hidden = !state.tasks.some((task) => ['queued', 'running'].includes(task.status));
+  const active = state.tasks.some((task) => ['queued', 'running', 'paused'].includes(task.status));
+  if (dot) dot.hidden = !active;
   if (finishedNow) loadFiles();
+}
+
+/* 任务状态变化时提示；完成动作选「浏览器通知」时额外发系统通知 */
+function notifyTaskEnds() {
+  state.tasks.forEach((task) => {
+    const prev = state.lastStatus[task.id];
+    if (!prev || prev === task.status) {
+      state.lastStatus[task.id] = task.status;
+      return;
+    }
+    state.lastStatus[task.id] = task.status;
+    if (task.status === 'done') {
+      toast(`${task.title} 下载完成`, 'ok');
+      if (task.finish_action === 'message') notifyDesktop(`下载完成：${task.title}`,
+        `${task.total} 首已完成`);
+    } else if (task.status === 'partial') {
+      toast(`${task.title} 有 ${task.failed} 首失败`, 'error');
+    } else if (task.status === 'failed') {
+      toast(`${task.title} 下载失败：${task.error || '全部歌曲失败'}`, 'error');
+    }
+  });
+}
+
+/* 浏览器通知：未授权时先请求授权，不可用时退回 toast */
+function notifyDesktop(title, body) {
+  if (!('Notification' in window)) { toast(body, 'ok'); return; }
+  if (Notification.permission === 'granted') {
+    try { new Notification(title, { body }); } catch (err) { /* 忽略 */ }
+    return;
+  }
+  if (Notification.permission !== 'denied') Notification.requestPermission();
 }
 
 let lastTaskSig = '';
@@ -941,11 +1320,17 @@ function renderTasks(force) {
 
 function taskCard(task) {
   const pct = Math.round((task.progress || 0) * 100);
-  const running = ['queued', 'running'].includes(task.status);
+  const running = ['queued', 'running', 'paused'].includes(task.status);
   const expanded = state.expanded.has(task.id);
   const ctl = [];
+  if (task.status === 'running') ctl.push('<button class="tiny" data-act="pause">暂停</button>');
+  if (task.status === 'paused') ctl.push('<button class="tiny" data-act="resume">继续</button>');
   if (running) ctl.push('<button class="tiny" data-act="cancel">取消</button>');
-  else ctl.push('<button class="tiny" data-act="delete">删除</button>');
+  if (['done', 'partial', 'failed', 'cancelled'].includes(task.status)
+    && (task.failed || task.status === 'cancelled')) {
+    ctl.push('<button class="tiny" data-act="retry">重试</button>');
+  }
+  if (!running) ctl.push('<button class="tiny" data-act="delete">移除</button>');
   ctl.push(`<button class="tiny" data-act="toggle">${expanded ? '收起' : '展开'}</button>`);
   const meta = [
     STATUS_CN[task.status] || task.status,
@@ -973,22 +1358,38 @@ function taskCard(task) {
   </div>`;
 }
 
+function activeProgressTask() {
+  return state.tasks.find((task) => ['queued', 'running', 'paused'].includes(task.status))
+    || state.tasks.find((task) => ['done', 'partial', 'failed', 'cancelled'].includes(task.status));
+}
+
 function renderGlobalProgress() {
-  const active = state.tasks.find((task) => task.status === 'running')
-    || state.tasks.find((task) => task.status === 'queued');
+  const active = activeProgressTask();
+  if (!active || state.dismissedTask === active.id) { paintGlobalProgress(0, null); return; }
+  state.dismissedTask = null;
+  paintGlobalProgress(active.progress || 0, active);
+}
+
+function paintGlobalProgress(ratio, task) {
   const bar = $('global-bar');
   const pctNode = $('global-pct');
-  if (!active) {
-    bar.style.width = '0';
+  bar.style.width = `${Math.max(0, Math.min(1, ratio || 0)) * 100}%`;
+  if (!task) {
     pctNode.textContent = '—';
-    pctNode.title = '当前任务进度';
+    pctNode.title = '';
     return;
   }
-  const pct = Math.round((active.progress || 0) * 100);
-  bar.style.width = `${pct}%`;
-  pctNode.textContent = `${pct}%`;
-  pctNode.title = `${active.title} · ${active.done}/${active.total}`
-    + (active.speed ? ` · ${fmtSpeed(active.speed)}` : '');
+  pctNode.textContent = `${((ratio || 0) * 100).toFixed(1)}%`;
+  pctNode.title = `${task.title} · ${task.done}/${task.total}`
+    + (task.speed ? ` · ${fmtSpeed(task.speed)}` : '') + '（点击清空进度）';
+}
+
+/* 下载任务结束后点击状态栏百分比清空进度条 */
+function clearGlobalProgress() {
+  const task = activeProgressTask();
+  if (!task || ['queued', 'running', 'paused'].includes(task.status)) return;
+  state.dismissedTask = task.id;
+  paintGlobalProgress(0, null);
 }
 
 /* ==================== 我的文件 ==================== */
@@ -1076,36 +1477,39 @@ function openFiles() {
   loadFiles();
 }
 
-function bindDrag(head) {
-  let dragging = false;
-  let startX = 0;
-  let startY = 0;
-  let baseLeft = 0;
-  let baseTop = 0;
-  let win = null;
-  head.addEventListener('mousedown', (event) => {
-    if (event.target.closest('button')) return;
-    win = head.closest('.pwin');
-    const rect = win.getBoundingClientRect();
-    baseLeft = rect.left;
-    baseTop = rect.top;
-    startX = event.clientX;
-    startY = event.clientY;
-    win.style.left = `${rect.left}px`;
-    win.style.top = `${rect.top}px`;
-    win.style.right = 'auto';
-    win.style.bottom = 'auto';
-    dragging = true;
-    event.preventDefault();
-  });
-  window.addEventListener('mousemove', (event) => {
-    if (!dragging || !win) return;
-    const left = Math.max(0, Math.min(window.innerWidth - 100, baseLeft + event.clientX - startX));
-    const top = Math.max(0, Math.min(window.innerHeight - 50, baseTop + event.clientY - startY));
-    win.style.left = `${left}px`;
-    win.style.top = `${top}px`;
-  });
-  window.addEventListener('mouseup', () => { dragging = false; });
+/* ==================== 日志（设置页「日志」分类） ==================== */
+function startLogPoll() {
+  stopLogPoll();
+  pollLogs();
+  state.logTimer = setInterval(pollLogs, 1500);
+}
+
+function stopLogPoll() {
+  if (state.logTimer) { clearInterval(state.logTimer); state.logTimer = null; }
+}
+
+async function pollLogs() {
+  if (state.settingsTab !== 'logs' || $('settings-mask').hidden) return;
+  try {
+    const data = await api(`/api/logs?seq=${state.logSeq}&level=${encodeURIComponent(state.logLevel)}`);
+    const items = (data && data.items) || [];
+    if (!items.length) return;
+    const box = $('log-list');
+    box.classList.remove('empty');
+    const wrap = box.closest('.log-wrap') || box.parentElement;
+    const near = wrap.scrollHeight - wrap.scrollTop - wrap.clientHeight < 40;
+    items.forEach((item) => {
+      state.logSeq = Math.max(state.logSeq, item.seq);
+      const time = new Date(item.time * 1000).toLocaleTimeString('zh-CN', { hour12: false });
+      const line = document.createElement('div');
+      line.className = 'log-line';
+      line.innerHTML = `<span class="t">${time}</span>`
+        + `<span class="lv lv-${esc(item.level)}">${esc(item.level.toUpperCase())}</span>`
+        + `<span>${esc(item.message)}</span>`;
+      box.appendChild(line);
+    });
+    if (near) wrap.scrollTop = wrap.scrollHeight;
+  } catch (err) { /* 轮询失败忽略 */ }
 }
 
 /* ==================== 设置 ==================== */
@@ -1119,10 +1523,13 @@ function openSettings() {
 }
 
 function setSettingsPanel(name) {
+  state.settingsTab = name;
   $$('#settings-tabs button').forEach((btn) => btn.classList.toggle('active', btn.dataset.spanel === name));
   $$('#settings-mask .modal-body [data-spanel]').forEach((panel) => {
     panel.hidden = panel.dataset.spanel !== name;
   });
+  if (name === 'logs') startLogPoll();
+  else stopLogPoll();
 }
 
 async function refreshAccountStates() {
@@ -1337,13 +1744,63 @@ function setView(view) {
   paintModeButton();
 }
 
-function openPlayerWindow() {
-  $('player-window').hidden = false;
-  syncPlayerTexts();
+/* 播放器窗口：下载模式下独立悬浮，右侧切换 歌词 / 播放列表 / 歌曲信息 */
+function openPlayerWindow(tab) {
+  const win = $('player-window');
+  if (!win) return;
+  win.hidden = false;
+  state.pwOpen = true;
+  if (tab) setPwTab(tab);
+  updatePlayerWindow();
   syncProgress();
+}
+
+function closePlayerWindow() {
+  const win = $('player-window');
+  if (!win) return;
+  state.pwOpen = false;
+  win.hidden = true;
+}
+
+function setPwTab(tab) {
+  state.pwTab = tab;
+  $$('#player-window .pw-tabs button').forEach((btn) => {
+    btn.classList.toggle('active', btn.dataset.pwTab === tab);
+  });
+  $$('#player-window .pw-panel').forEach((panel) => {
+    panel.hidden = panel.dataset.pwPanel !== tab;
+  });
+  if (tab === 'queue') renderQueue();
+  if (tab === 'info') renderPwInfo();
+}
+
+/* 歌曲信息面板 */
+function renderPwInfo() {
+  const box = $('pw-info');
+  if (!box) return;
+  const song = currentSong();
+  if (!song) { box.innerHTML = '<p class="muted small">未在播放</p>'; return; }
+  const rows = [
+    ['歌名', song.name],
+    ['歌手', song.artists],
+    ['专辑', song.album],
+    ['时长', song.duration_str],
+    ['大小≈', song.size],
+    ['音源', labelOf((state.meta || {}).sources, song.source)],
+    ['编码', encodeOf(song.source, (state.prefs || {}).level).toUpperCase()],
+  ];
+  box.innerHTML = rows.map(([label, value]) => (
+    `<div class="info-row"><span>${esc(label)}</span><b>${esc(value || '—')}</b></div>`
+  )).join('');
+}
+
+function updatePlayerWindow() {
+  paintCoverButton(currentSong());
+  if (!state.pwOpen) return;
+  syncPlayerTexts();
   paintPlayButton();
   paintModeButtonPlay();
-  paintMuteButton();
+  if (state.pwTab === 'info') renderPwInfo();
 }
 
 function paintModeButton() {
@@ -1437,6 +1894,8 @@ async function playIndex(index) {
   syncPlayerTexts();
   setPlayHint('正在取址…');
   markPlayingRow();
+  renderQueue();
+  updatePlayerWindow();
   if (state.view === 'download') openPlayerWindow();
   try {
     const data = await api('/api/play', { song, level: (state.prefs || {}).level });
@@ -1559,6 +2018,7 @@ function resetLyric(text) {
     box.classList.add('is-empty');
     box.textContent = text || '（暂无歌词）';
   });
+  updateStatusLyric(audio.currentTime || 0);
 }
 
 async function loadLyric(song) {
@@ -1578,6 +2038,7 @@ async function loadLyric(song) {
     });
     lastLyricIndex = -1;
     syncLyric(audio.currentTime, true);
+    updateStatusLyric(audio.currentTime || 0);
   } catch (err) {
     state.lyric = [];
     resetLyric('歌词获取失败');
@@ -1604,21 +2065,78 @@ function syncLyric(time, force) {
   });
 }
 
-/* 全部播放：把当前可见列表整批作为播放队列，从第一首开始 */
+/* ==================== 状态栏歌词：随长度顶开进度条 ==================== */
+let statusLyricKey = '';
+
+function statusLyricMaxPx() {
+  const percent = Math.max(10, Math.min(60, Number((state.prefs || {}).status_lyric_max) || 60));
+  return window.innerWidth * percent / 100;
+}
+
+function updateStatusLyric(time) {
+  const box = $('status-lyric');
+  const inner = $('status-lyric-inner');
+  if (!box || !inner) return;
+  const song = currentSong();
+  const lines = state.lyric || [];
+  let index = -1;
+  for (let i = 0; i < lines.length; i += 1) {
+    if (lines[i].t <= time + 0.2) index = i; else break;
+  }
+  const line = index >= 0 ? lines[index] : null;
+  const text = line ? String(line.text || '').trim() : '';
+  if (!(state.prefs || {}).status_lyric || !song || !text) {
+    box.hidden = true;
+    box.classList.remove('on');
+    box.style.width = '0px';
+    inner.textContent = '';
+    inner.style.transform = 'translateX(0)';
+    statusLyricKey = '';
+    return;
+  }
+  box.hidden = false;
+  box.classList.add('on');
+  if (statusLyricKey !== `${song.key}#${index}`) {
+    statusLyricKey = `${song.key}#${index}`;
+    inner.textContent = text;
+    inner.style.transform = 'translateX(0)';
+  }
+  const natural = inner.scrollWidth;
+  const view = Math.min(natural, statusLyricMaxPx());
+  box.style.width = `${view}px`;
+  if (view >= natural) { inner.style.transform = 'translateX(0)'; return; }
+  // 当前唱到的字约在视野 70% 处：未到 70% 不滚动，超出后滚动，滚到末尾即停
+  const start = line.t;
+  const end = index + 1 < lines.length ? lines[index + 1].t : start + 4;
+  const ratio = Math.max(0, Math.min(1, (time - start) / Math.max(0.5, end - start)));
+  const charX = ratio * natural;
+  const offset = Math.max(0, Math.min(natural - view, charX - view * 0.7));
+  inner.style.transform = `translateX(${-offset}px)`;
+}
+
+/* 双击听歌：把该曲加入播放列表后立即播放（与原版一致） */
+async function playFromList(key) {
+  const song = findSong(key);
+  if (!song) return;
+  const existing = queueIndexOf(song.key);
+  const index = existing >= 0 ? existing : insertQueue(song, state.queue.length);
+  await playIndex(index);
+}
+
+/* 全部播放：把当前列表整批追加进播放列表，并播放第一首新加入的曲目 */
 async function playAll() {
   const songs = visibleSongs();
   if (!songs.length) { toast('当前列表没有歌曲', 'error'); return; }
-  state.queue = songs.slice();
-  await playIndex(0);
-}
-
-/* 双击列表某行：以当前可见列表为队列，从该行开始播放 */
-function playSongByKey(key) {
-  const songs = visibleSongs();
-  const index = songs.findIndex((song) => song.key === key);
-  if (index < 0) return;
-  state.queue = songs.slice();
-  playIndex(index);
+  let firstNew = -1;
+  songs.forEach((song) => {
+    if (queueIndexOf(song.key) < 0) {
+      if (firstNew < 0) firstNew = state.queue.length;
+      state.queue.push(song);
+    }
+  });
+  renderQueue();
+  const target = firstNew >= 0 ? firstNew : queueIndexOf(songs[0].key);
+  await playIndex(target);
 }
 
 /* ==================== 扫码登录 ==================== */
@@ -1743,7 +2261,7 @@ function bind() {
   });
   $('btn-my-playlists').addEventListener('click', openMyPlaylists);
   $('btn-src').addEventListener('click', switchSource);
-  $('btn-cover').addEventListener('click', () => openPlayerWindow());
+  $('btn-cover').addEventListener('click', () => openPlayerWindow('lyric'));
 
   /* 列表 */
   $('song-list').addEventListener('click', (event) => {
@@ -1757,12 +2275,14 @@ function bind() {
     if (row) togglePick(row.dataset.key);
   });
   $('btn-pick-all').addEventListener('click', togglePickAll);
-  $('btn-download-sel').addEventListener('click', () => submitDownload());
+  $('btn-download-sel').addEventListener('click', () => {
+    openDownloadDialog(visibleSongs().filter((song) => state.selected.has(song.key)));
+  });
   $('btn-play-all').addEventListener('click', playAll);
   $('song-list').addEventListener('dblclick', (event) => {
     if (event.target.closest('.pick') || event.target.closest('.resizer')) return;
     const row = event.target.closest('tr[data-key]');
-    if (row) playSongByKey(row.dataset.key);
+    if (row) playFromList(row.dataset.key);
   });
   $('song-list').addEventListener('contextmenu', (event) => {
     const row = event.target.closest('tr[data-key]');
@@ -1800,12 +2320,16 @@ function bind() {
   $('pl-prev').addEventListener('click', () => stepSong(-1));
   $('pl-next').addEventListener('click', () => stepSong(1));
   $('pl-mode').addEventListener('click', cycleMode);
+  $('pl-list').addEventListener('click', toggleQueue);
   $('pl-mute').addEventListener('click', () => setVolume(audio.volume > 0 ? 0 : 60));
   $('pl-volume').addEventListener('input', (event) => setVolume(event.target.value));
   $('pl-seek').addEventListener('input', (event) => {
     if (audio.duration) audio.currentTime = (Number(event.target.value) / 1000) * audio.duration;
   });
-  $('pw-close').addEventListener('click', () => { $('player-window').hidden = true; });
+  $('pw-close').addEventListener('click', closePlayerWindow);
+  $$('#player-window .pw-tabs button').forEach((btn) => {
+    btn.addEventListener('click', () => setPwTab(btn.dataset.pwTab));
+  });
   $('pw-toggle').addEventListener('click', togglePlay);
   $('pw-prev').addEventListener('click', () => stepSong(-1));
   $('pw-next').addEventListener('click', () => stepSong(1));
@@ -1820,6 +2344,7 @@ function bind() {
   audio.addEventListener('timeupdate', () => {
     syncProgress();
     syncLyric(audio.currentTime || 0);
+    updateStatusLyric(audio.currentTime || 0);
   });
   audio.addEventListener('loadedmetadata', syncProgress);
   audio.addEventListener('ended', () => {
@@ -1854,14 +2379,20 @@ function bind() {
     btn.disabled = true;
     try {
       if (act === 'cancel') {
-        await api(`/api/tasks/${id}/cancel`, {});
+        if (!confirm('取消该下载任务？未完成的部分将被清理。')) return;
+        await api('/api/task/action', { id, action: 'cancel' });
         toast('已请求取消任务', 'ok');
       } else if (act === 'delete') {
-        await api(`/api/tasks/${id}`, {}, 'DELETE');
-        toast('任务及文件已删除', 'ok');
+        if (!confirm('移除该任务并删除其尚未导出的文件？')) return;
+        await api('/api/task/action', { id, action: 'delete' });
+        toast('任务已移除', 'ok');
         await loadFiles();
+      } else {
+        await api('/api/task/action', { id, action: act });
+        toast({ pause: '任务已暂停', resume: '任务已继续', retry: '已重新开始任务' }[act] || '操作完成', 'ok');
       }
       await refreshTasks(true);
+      renderTasks(true);
     } catch (err) {
       toast(err.message, 'error');
     } finally {
@@ -1902,9 +2433,15 @@ function bind() {
   $('btn-export').addEventListener('click', exportSelected);
 
   /* 设置 */
-  $('settings-close').addEventListener('click', () => { $('settings-mask').hidden = true; });
+  $('settings-close').addEventListener('click', () => {
+    $('settings-mask').hidden = true;
+    stopLogPoll();
+  });
   $('settings-mask').addEventListener('click', (event) => {
-    if (event.target === $('settings-mask')) $('settings-mask').hidden = true;
+    if (event.target === $('settings-mask')) {
+      $('settings-mask').hidden = true;
+      stopLogPoll();
+    }
   });
   $$('#settings-tabs button').forEach((btn) => {
     btn.addEventListener('click', () => setSettingsPanel(btn.dataset.spanel));
@@ -1918,12 +2455,47 @@ function bind() {
   $('pref-level').addEventListener('change', () => savePrefs({ level: $('pref-level').value }));
   [['pref-lyric', 'save_lyric'], ['pref-tag', 'embed_tag'],
    ['pref-cover', 'embed_cover'], ['pref-embed-lyric', 'embed_lyric'],
+   ['pref-skip', 'skip_existing'], ['pref-task-folder', 'task_folder'],
+   ['pref-status-lyric', 'status_lyric'],
    ['pref-delete-after', 'delete_after_export']]
     .forEach(([id, key]) => {
       $(id).addEventListener('change', () => savePrefs({ [key]: $(id).checked }));
     });
+  $('pref-template').addEventListener('change', () => {
+    savePrefs({ name_template: $('pref-template').value.trim() || '{artist} - {name}' });
+  });
+  $('pref-folder').addEventListener('change', () => {
+    savePrefs({ folder_structure: $('pref-folder').value });
+  });
+  $('pref-workers').addEventListener('change', () => {
+    savePrefs({ workers: Number($('pref-workers').value || 3) });
+  });
+  $('pref-retry').addEventListener('change', () => {
+    savePrefs({ retry: Number($('pref-retry').value || 0) });
+  });
+  $('pref-finish').addEventListener('change', () => {
+    savePrefs({ finish_action: $('pref-finish').value });
+  });
+  $('pref-status-lyric-max').addEventListener('change', () => {
+    savePrefs({ status_lyric_max: Number($('pref-status-lyric-max').value || 60) });
+  });
   $('pref-retention').addEventListener('change', () => {
     savePrefs({ retention_hours: Number($('pref-retention').value) });
+  });
+
+  /* 日志页 */
+  $('log-level').addEventListener('change', () => {
+    state.logLevel = $('log-level').value;
+    savePrefs({ log_level: state.logLevel });
+  });
+  $('btn-clear-log').addEventListener('click', async () => {
+    try {
+      await api('/api/logs/clear', {});
+      state.logSeq = 0;
+      const list = $('log-list');
+      list.innerHTML = '暂无日志';
+      list.classList.add('empty');
+    } catch (err) { toast(err.message, 'error'); }
   });
 
   $$('[data-login]').forEach((btn) => {
@@ -1946,16 +2518,29 @@ function bind() {
     });
   });
 
-  /* 窗口拖动 */
-  $$('.pwin-head[data-drag]').forEach(bindDrag);
+  /* 窗口拖动与位置记忆 */
+  setPwTab(state.pwTab || 'lyric');
+  [['tasks-window', 'tasks'], ['files-window', 'files'], ['player-window', 'player']]
+    .forEach(([id, key]) => {
+      const win = $(id);
+      if (!win) return;
+      applyPanelPos(win, key);
+      bindPanelDrag(win, key);
+    });
+
+  /* 状态栏进度：点击清空 */
+  $('global-pct').addEventListener('click', clearGlobalProgress);
 
   /* 快捷键 */
   document.addEventListener('keydown', (event) => {
     if (event.key !== 'Escape') return;
     closeMenu();
-    if (!$('tasks-window').hidden) $('tasks-window').hidden = true;
-    else if (!$('files-window').hidden) $('files-window').hidden = true;
-    else if (!$('settings-mask').hidden) $('settings-mask').hidden = true;
+    hideMenu();
+    if (state.queueOpen) { closeQueue(); return; }
+    if (!$('player-window').hidden) { closePlayerWindow(); return; }
+    if (!$('tasks-window').hidden) { $('tasks-window').hidden = true; return; }
+    if (!$('files-window').hidden) { $('files-window').hidden = true; return; }
+    if (!$('settings-mask').hidden) { $('settings-mask').hidden = true; stopLogPoll(); }
   });
 }
 

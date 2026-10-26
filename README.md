@@ -2,9 +2,9 @@
 
 面向网易云音乐 / QQ 音乐的歌曲检索、播放与下载工具。后端为 Python 本地 HTTP 服务，前端为原生 HTML / CSS / JavaScript 单页应用，二者通过本机 HTTP + JSON 通信。
 
-- 服务固定绑定回环地址 `127.0.0.1`，不对外网暴露；
-- 附带桌面守护窗口，展示服务状态与实时日志，关闭窗口后最小化至系统托盘；
-- 前端零构建链，静态资源由本地服务直接托管。
+- `web_tk/`：桌面版，服务固定绑定回环地址 `127.0.0.1`（默认 8756），附带桌面守护窗口与系统托盘；
+- `server/`：公网多用户版，监听 `0.0.0.0:3434`，无桌面组件，全部操作通过浏览器完成；
+- 两版前端均为零构建链的原生 HTML / CSS / JavaScript 静态资源，由各自的 Python HTTP 服务托管，前后端以本机 HTTP + JSON 轮询通信。
 
 > 仅供个人学习与数据备份使用，请遵守相关音乐平台的服务条款与版权规定，勿用于商业用途。
 
@@ -12,7 +12,7 @@
 
 ### 界面与交互模式
 
-- 导航栏提供下载、导出、下载任务、下载目录、设置五项入口，并支持「下载模式 / 播放器模式」切换
+- 导航栏提供下载、下载任务、设置等入口（桌面版另含列表导出与打开下载目录），并支持「下载模式 / 播放器模式」切换
 - **播放器模式**：左右分栏，左侧为封面、曲目信息、播放进度与控制，右侧为跟随播放进度高亮并自动居中的滚动歌词
 - **下载模式**：检索栏右侧为当前曲目封面入口，点击打开独立播放器窗口；窗口内以上方标签页切换 **歌词 / 播放队列 / 曲目信息**
 - 列表工具条展示加载状态、已选数量，并提供全选 / 清空勾选、全部播放
@@ -53,13 +53,13 @@
 - 播放时于状态栏左侧渲染当前歌词，并按歌词排版宽度动态压缩进度条可用区域；切换行时以弹性过渡复位
 - 歌词区域宽度上限为视口宽度的 60%（可配置，亦可整体关闭）；超出上限时按行内时间比例计算横向偏移，当前字词保持在可视区域约 70% 位置
 - 进度条右侧保留固定宽度的数值进度位；区域压缩仅影响可视填充，不改变实际进度；任务完成后点击数值可清除进度显示
-- 无播放曲目时，封面入口与播放器回退至用户头像
+- 无播放曲目时，封面入口与播放器回退至当前音源 Logo；已登录音源时显示账号头像
 
 ### 设置与数据交换
 
 - 设置面板固定尺寸、内容区独立滚动，分为音乐 / 用户 / 系统 / 日志四类
 - 密钥按音源分组：网易云 weapi 密钥与 QQ 音乐凭证独立配置
-- 配置支持整体导入 / 导出；列表支持 CSV / M3U / TXT 导出
+- 配置支持整体导入 / 导出；列表支持 CSV / M3U / TXT 导出（均为桌面版本地能力；Server 版偏好与列表存于服务端，不提供文件导出）
 
 ## 环境要求
 
@@ -85,8 +85,10 @@ python web_tk/MusicDownloaderWeb.py
 
 - 配置由单用户本地文件改为按用户存入 SQLite，登录态（网易云 Cookie / QQ 凭证）与下载偏好均按用户隔离
 - 移除桌面窗口、系统托盘、关机 / 提示音 / 弹窗 / 打开目录等本地动作，服务纯后台常驻；成品文件通过浏览器取回
-- 移除配置导入导出与本机路径设置；保留 **扫码登录**（网易云 / QQ）与 Cookie 导入两种方式
+- 移除配置导入导出、列表导出（CSV / M3U / TXT）与本机路径设置；保留 **扫码登录**（网易云 / QQ）与 Cookie 导入两种方式
 - 保留 **播放器模式**：服务端只返回音源直链，音频由浏览器直接拉取，不占用服务器带宽
+- 与桌面版对齐的交互：音源切换按钮、扫码登录、左缘播放列表岛、独立播放器窗口（歌词 / 播放列表 / 歌曲信息）、状态栏歌词、下载选项弹窗（音质、编码、命名模板、文件夹组织、跳过已存在、并发与重试）、任务暂停 / 继续 / 取消 / 重试、歌曲右键菜单、列宽拖拽、音质探测与歌曲详情
+- 下载完成动作收敛为浏览器通知（`message`），其余桌面动作不适用；日志面板支持分级查看与清空
 - 「我的文件」支持多选导出：单个直接下发原文件，多个自动打包为 zip；文件保留时长可在设置中调整，并可选择「导出后立即删除源文件」
 - 新增账号注册登录、每用户 Cookie 隔离、存储配额、文件过期清理、并发任务限制
 - 账号系统可选：未登录直接以访客身份使用全部功能（文件与音源凭据落在访客空间），登录后归入个人账号
@@ -149,10 +151,10 @@ python server/app.py
     ├── routes.py          # HTTP 路由、鉴权与文件流式下载
     ├── api.py / qq_api.py / downloader.py / encrypt.py / models.py  # 与原版同源的模块副本
     ├── requirements.txt   # 依赖清单
-    └── web/               # 前端（沿用桌面版界面：登录、检索、任务、文件）
+    └── web/               # 前端（原位改自桌面版界面：登录、检索、播放列表、任务、文件、设置与日志）
 ```
 
-## 配置说明
+## 配置说明（桌面版）
 
 程序读取同目录下的 `config.json`（即 `web_tk/config.json`），所有配置项均可在 Web 设置页修改，无需手动编辑。
 
@@ -162,9 +164,11 @@ python server/app.py
 
 `config.json` 会保存登录 Cookie 与凭证，已被 `.gitignore` 忽略，请勿提交至公开仓库。
 
-## 本地 HTTP 接口
+## HTTP 接口
 
-前后端采用本机 HTTP + JSON 轮询通信（未引入 WebSocket / SSE）：
+两版均采用 HTTP + JSON 轮询通信（未引入 WebSocket / SSE）。桌面版接口面向单用户本机调用，Server 版接口在公共请求头之外附加会话 Cookie 鉴权。
+
+### 桌面版
 
 ```text
 GET  /api/meta                 音源、音质档位、编码类型等元信息
@@ -195,7 +199,41 @@ POST /api/open_dir             打开下载目录
 POST /api/export               列表导出（CSV / M3U / TXT）
 ```
 
-## 打包为单文件可执行程序
+### Server 版
+
+```text
+GET  /api/health               健康检查（免鉴权）
+GET  /api/auth/me              当前会话用户
+GET  /api/meta                 音源、音质、账号与配额元信息
+GET  /api/prefs                读取当前用户偏好
+GET  /api/tasks                下载任务列表（轮询）
+GET  /api/files                我的文件列表与用量
+GET  /api/files/{id}/download  取回成品文件
+GET  /api/files/archive?ids=   多选打包为 zip
+GET  /api/logs?seq=&level=     增量日志轮询
+POST /api/auth/register        注册账号
+POST /api/auth/login           登录
+POST /api/auth/logout          退出登录
+POST /api/prefs                更新偏好
+POST /api/account              查询音源登录态
+POST /api/account/login        导入音源 Cookie / 凭证
+POST /api/account/logout       退出音源登录
+POST /api/login/qr/start       扫码登录 - 开始
+POST /api/login/qr/poll        扫码登录 - 轮询
+POST /api/search               关键词检索
+POST /api/playlist             按歌单 ID / 链接加载歌单
+POST /api/my_playlists         我的歌单
+POST /api/liked                我喜欢的音乐
+POST /api/song                 单曲链接定位
+POST /api/probe                音质探测
+POST /api/play                 获取播放地址
+POST /api/lyric                获取歌词
+POST /api/download             提交下载任务
+POST /api/task/action          任务暂停 / 继续 / 取消 / 重试 / 移除
+POST /api/logs/clear           清空日志
+```
+
+## 打包为单文件可执行程序（桌面版）
 
 ```bash
 pip install pyinstaller
@@ -203,7 +241,7 @@ python -m PyInstaller --noconfirm --clean --onefile --windowed --name MusicDownl
   --collect-all qqmusic_api ^
   --hidden-import mutagen.id3 --hidden-import mutagen.flac --hidden-import mutagen.mp4 ^
   --hidden-import qrcode.image.pil ^
-  --add-data "web;web" MusicDownloaderWeb.py
+  --add-data "web_tk/web;web" web_tk/MusicDownloaderWeb.py
 ```
 
 产物为单文件、静态链接，目标机器无需安装 Python。程序以**可执行文件所在目录**作为配置与下载目录，整个目录可整体迁移。

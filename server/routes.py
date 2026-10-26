@@ -80,6 +80,16 @@ def h_lyric(ctx, payload):
     return ctx.service.lyric(ctx.user_id, payload or {})
 
 
+def h_song(ctx, payload):
+    return ctx.service.song_detail(ctx.user_id,
+                                   payload.get('value') or payload.get('id') or '',
+                                   payload.get('source'))
+
+
+def h_probe(ctx, payload):
+    return ctx.service.probe(ctx.user_id, payload or {})
+
+
 def h_search(ctx, payload):
     return ctx.service.search(ctx.user_id, payload.get('keyword'),
                               payload.get('limit') or 50, payload.get('offset') or 0,
@@ -107,6 +117,25 @@ def h_tasks(ctx, _payload):
     return {'items': ctx.service.tasks(ctx.user_id)}
 
 
+def h_task_action(ctx, payload):
+    return ctx.service.task_action(ctx.user_id, payload.get('id') or '',
+                                   payload.get('action') or '')
+
+
+def h_logs(ctx, payload):
+    try:
+        seq = int(payload.get('seq') or 0)
+    except (TypeError, ValueError):
+        seq = 0
+    level = payload.get('level') or ctx.service.prefs(ctx.user_id)['log_level']
+    return {'items': ctx.service.logs_since(seq, level, ctx.user_id)}
+
+
+def h_logs_clear(ctx, _payload):
+    ctx.service.clear_logs()
+    return {'cleared': True}
+
+
 def h_files(ctx, _payload):
     return {'items': ctx.service.files(ctx.user_id),
             'usage': ctx.service.store.user_usage(ctx.user_id)}
@@ -121,7 +150,12 @@ ROUTES = {
     ('GET', '/api/prefs'): h_prefs_get,
     ('GET', '/api/tasks'): h_tasks,
     ('GET', '/api/files'): h_files,
+    ('GET', '/api/logs'): h_logs,
     ('POST', '/api/prefs'): h_prefs_set,
+    ('POST', '/api/logs/clear'): h_logs_clear,
+    ('POST', '/api/task/action'): h_task_action,
+    ('POST', '/api/song'): h_song,
+    ('POST', '/api/probe'): h_probe,
     ('POST', '/api/account'): h_account,
     ('POST', '/api/account/login'): h_login_cookie,
     ('POST', '/api/account/logout'): h_logout_source,
