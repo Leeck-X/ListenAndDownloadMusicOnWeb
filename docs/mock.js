@@ -90,6 +90,37 @@
     return Array.from({ length: count }, (_item, index) => songAt(index));
   }
 
+  /* ---------- 搜索结果生成：关键词参与歌名 / 歌手 / 专辑 ---------- */
+  const SEARCH_ARTISTS = ['林间乐队', '陈以晴', '午夜巴士', '远行者', '木吉他小组', '苏木',
+    '白昼乐队', '雁南飞', '行星计划', '夜航船', '纸飞机', '海风合唱团'];
+  const SEARCH_ALBUMS = ['夏夜散步', '夜空集', '城市光影', '行囊', '回响', '四季',
+    '静默', '旅人日记', '深空', '破晓', '手写信', '海岸线'];
+  const TITLE_HEAD = ['晚风', '星河', '城市', '山海', '旧时', '雨落', '无声', '南方', '光年', '黎明', '纸上', '风'];
+  const TITLE_TAIL = ['告白', '入梦', '霓虹', '之间', '回响', '窗前', '对白', '之雪', '之外', '之前', '月光', '之诗'];
+  const TITLE_SUFFIX = ['外传', '进行曲', '之歌', '随笔', '狂想曲', '练习曲', '片段', '小夜曲', '叙事', '回响', '序曲', '独白'];
+  const SEARCH_MAX = 144;
+
+  function searchSong(index, keyword) {
+    const base = songAt(index);
+    const name = TITLE_HEAD[Math.floor(index / 12) % TITLE_HEAD.length]
+      + TITLE_TAIL[index % TITLE_TAIL.length];
+    const artists = SEARCH_ARTISTS[Math.floor(index / 12) % SEARCH_ARTISTS.length];
+    const album = SEARCH_ALBUMS[index % SEARCH_ALBUMS.length];
+    if (!keyword) return Object.assign(base, { name, artists, album });
+    const mode = index % 3;
+    if (mode === 1) {
+      return Object.assign(base, {
+        name: `${keyword}${TITLE_SUFFIX[index % TITLE_SUFFIX.length]}`,
+        artists,
+        album: `${keyword} 作品集`,
+      });
+    }
+    if (mode === 2) {
+      return Object.assign(base, { name, artists, album: `${keyword}合集` });
+    }
+    return Object.assign(base, { name, artists: keyword, album });
+  }
+
   /* ---------- 账号（仅存在页面变量中） ---------- */
   const accounts = { netease: null, qq: null };
   const qrPolls = {};
@@ -220,30 +251,56 @@
     downloadBlob(new Blob([silentWav()], { type: 'audio/wav' }), `${base}.wav`);
   }
 
-  // 未压缩的最小 ZIP：每个条目为零字节，避免引入第三方库
-  function zipBlob(names) {
+  function crc32(bytes) {
+    let table = crc32.table;
+    if (!table) {
+      table = new Uint32Array(256);
+      for (let i = 0; i < 256; i += 1) {
+        let code = i;
+        for (let k = 0; k < 8; k += 1) code = code & 1 ? 0xEDB88320 ^ (code >>> 1) : code >>> 1;
+        table[i] = code >>> 0;
+      }
+      crc32.table = table;
+    }
+    let crc = 0xFFFFFFFF;
+    for (let i = 0; i < bytes.length; i += 1) {
+      crc = table[(crc ^ bytes[i]) & 0xFF] ^ (crc >>> 8);
+    }
+    return (crc ^ 0xFFFFFFFF) >>> 0;
+  }
+
+  // 未压缩 ZIP，条目内容为浏览器内生成的文件
+  function zipBlob(entries) {
     const parts = [];
     const central = [];
     const encoder = new TextEncoder();
     let offset = 0;
-    names.forEach((name) => {
-      const bytes = encoder.encode(name);
-      const local = new Uint8Array(30 + bytes.length);
+    entries.forEach((entry) => {
+      const nameBytes = encoder.encode(entry.name);
+      const content = new Uint8Array(entry.data || new ArrayBuffer(0));
+      const crc = crc32(content);
+      const local = new Uint8Array(30 + nameBytes.length + content.length);
       const view = new DataView(local.buffer);
       view.setUint32(0, 0x04034b50, true);
-      view.setUint16(4, 10, true);
-      view.setUint16(26, bytes.length, true);
-      local.set(bytes, 30);
+      view.setUint16(4, 20, true);
+      view.setUint32(14, crc, true);
+      view.setUint32(18, content.length, true);
+      view.setUint32(22, content.length, true);
+      view.setUint16(26, nameBytes.length, true);
+      local.set(nameBytes, 30);
+      local.set(content, 30 + nameBytes.length);
       parts.push(local);
-      const dir = new Uint8Array(46 + bytes.length);
+      const dir = new Uint8Array(46 + nameBytes.length);
       const dview = new DataView(dir.buffer);
       dview.setUint32(0, 0x02014b50, true);
-      dview.setUint16(4, 10, true);
-      dview.setUint16(6, 10, true);
-      dview.setUint32(16, 0, true);
+      dview.setUint16(4, 20, true);
+      dview.setUint16(6, 20, true);
+      dview.setUint32(16, crc, true);
+      dview.setUint32(20, content.length, true);
+      dview.setUint32(24, content.length, true);
+      dview.setUint16(28, nameBytes.length, true);
       dview.setUint32(42, offset, true);
-      dview.setUint16(28, bytes.length, true);
-      dir.set(bytes, 46);
+      dir.set(nameBytes, 46);
       central.push(dir);
       offset += local.length;
     });
@@ -253,8 +310,8 @@
     const end = new Uint8Array(22);
     const eview = new DataView(end.buffer);
     eview.setUint32(0, 0x06054b50, true);
-    eview.setUint16(8, names.length, true);
-    eview.setUint16(10, names.length, true);
+    eview.setUint16(8, entries.length, true);
+    eview.setUint16(10, entries.length, true);
     eview.setUint32(12, dirSize, true);
     eview.setUint32(16, dirStart, true);
     parts.push(end);
@@ -393,7 +450,7 @@
     if (path === '/api/files/archive') {
       const picked = (query.get('ids') || '').split(',').filter(Boolean);
       const names = files.filter((file) => picked.includes(file.id)).map((file) => file.filename);
-      downloadBlob(zipBlob(names), 'files.zip');
+      downloadBlob(zipBlob(names.map((name) => ({ name, data: silentWav() }))), 'files.zip');
       return ok({ started: true });
     }
     if (/^\/api\/files\/[^/]+$/.test(path) && method === 'DELETE') {
@@ -411,16 +468,22 @@
 
     if (path === '/api/search') {
       const keyword = (body.keyword || '').trim();
-      const list = trackList(30).map((song) => Object.assign({}, song, {
-        artists: keyword || song.artists,
-      }));
-      return ok({ songs: list, offset: list.length });
+      if (!keyword) return fail('请输入搜索关键词');
+      const offset = Math.max(0, Number(body.offset) || 0);
+      const limit = Math.min(100, Math.max(1, Number(body.limit) || 50));
+      const songs = [];
+      for (let i = offset; i < offset + limit && i < SEARCH_MAX; i += 1) {
+        songs.push(searchSong(i, keyword));
+      }
+      return ok({ songs, offset: offset + songs.length });
     }
     if (path === '/api/playlist') {
       const text = (body.text || '').trim();
       return ok({ title: text ? `歌单 ${text}` : '歌单', songs: trackList(18) });
     }
     if (path === '/api/my_playlists') {
+      const source = body.source === 'qq' ? 'qq' : 'netease';
+      if (!accounts[source]) return fail('请先登录音源后查看我的歌单');
       return ok({ items: [
         { id: '100', title: '我喜欢的音乐', cover: coverFor(0), count: 12 },
         { id: '101', title: '深夜循环', cover: coverFor(2), count: 24 },
@@ -428,7 +491,11 @@
         { id: '103', title: '收藏歌单', cover: coverFor(4), count: 8 },
       ] });
     }
-    if (path === '/api/liked') return ok({ title: '我喜欢的音乐', songs: trackList(12) });
+    if (path === '/api/liked') {
+      const source = body.source === 'qq' ? 'qq' : 'netease';
+      if (!accounts[source]) return fail('请先登录音源后查看我喜欢的音乐');
+      return ok({ title: '我喜欢的音乐', songs: trackList(12) });
+    }
 
     if (path === '/api/song') {
       const value = String(body.value || body.id || '0');
@@ -445,7 +512,20 @@
       return ok({ url: playUrl, type: 'mp3', size: 10500000, level: body.level || prefs.level, encode: 'mp3' });
     }
     if (path === '/api/lyric') return ok({ lyric: lyricText, trans: '' });
-    if (path === '/api/download') return ok(newTask(body));
+    if (path === '/api/download') {
+      const songs = body.songs || [];
+      if (!songs.length) return fail('请先选择歌曲');
+      const entries = songs.map((song, index) => ({
+        name: `${song.artists ? song.artists + ' - ' : ''}${song.name || ('track ' + (index + 1))}.wav`,
+        data: silentWav(),
+      }));
+      if (entries.length === 1) {
+        downloadBlob(new Blob([entries[0].data], { type: 'audio/wav' }), entries[0].name);
+      } else {
+        downloadBlob(zipBlob(entries), 'download.zip');
+      }
+      return ok({ id: `t${now()}`, status: 'done', total: songs.length, done: songs.length, failed: 0, progress: 1, items: [] });
+    }
 
     return fail(`未实现该接口：${path}`);
   }
@@ -474,6 +554,6 @@
     if (!btn || !btn.contains(event.target)) return;
     event.preventDefault();
     event.stopPropagation();
-    downloadBlob(zipBlob(files.map((file) => file.filename)), 'files.zip');
+    downloadBlob(zipBlob(files.map((file) => ({ name: file.filename, data: silentWav() }))), 'files.zip');
   }, true);
 })();

@@ -1415,19 +1415,12 @@ function openSettings(tab = 'music') {
       <p class="muted small">账号按音源分别保存；Cookie 导入在登录窗口中提供。下载完成后的动作在「音乐」分类中设置。</p>
     </div>
     <div data-spanel="system" hidden>
-      <h4 class="sub">网易云音乐 · 密钥</h4>
-      <label class="field small">key1<input id="cfg-key1" type="text"></label>
-      <label class="field small">iv<input id="cfg-iv" type="text"></label>
-      <label class="field small">pub_key<input id="cfg-pub" type="text"></label>
-      <label class="field small">modulus<textarea id="cfg-modulus" rows="2"></textarea></label>
-      <h4 class="sub">QQ 音乐 · 密钥 / 凭证</h4>
+      <h4 class="sub">QQ 音乐 · 凭证</h4>
       <label class="field">凭证状态<b id="cfg-qq-state" class="acct">—</b></label>
-      <label class="field small">凭证 JSON<textarea id="cfg-qq-credential" rows="3"
-        placeholder="粘贴 credential JSON；留空表示不修改"></textarea></label>
       <div class="row">
         <button id="cfg-qq-clear" class="ghost tiny">清空 QQ 凭证</button>
       </div>
-      <p class="muted small">QQ 凭证一般由扫码登录自动写入，也可在此粘贴导入；两端密钥互不影响。</p>
+      <p class="muted small">QQ 凭证由扫码登录自动写入，不在此处展示。</p>
       <h4 class="sub">服务</h4>
       <label class="field">监听地址<input id="cfg-host" type="text" readonly title="仅本机使用，固定为 127.0.0.1"></label>
       <p class="muted small">固定为 127.0.0.1，仅本机可访问，不支持修改。</p>
@@ -1514,11 +1507,6 @@ function openSettings(tab = 'music') {
   m.body.querySelector('#cfg-status-lyric').checked = cfg.status_lyric !== false;
   m.body.querySelector('#cfg-status-lyric-max').value = cfg.status_lyric_max ?? 60;
   m.body.querySelector('#cfg-anon').checked = !!cfg.use_anonimous;
-  const keys = cfg.weapi_keys || {};
-  m.body.querySelector('#cfg-key1').value = keys.key1 || '';
-  m.body.querySelector('#cfg-iv').value = keys.iv || '';
-  m.body.querySelector('#cfg-pub').value = keys.pub_key || '';
-  m.body.querySelector('#cfg-modulus').value = keys.modulus || '';
   m.body.querySelector('#cfg-path').textContent = '配置文件：' + (S.meta.config_path || '');
   m.body.querySelector('#cfg-account').textContent = S.account?.logged_in
     ? `${S.account.nickname}${S.account.vipType ? ' · VIP' : ''}`
@@ -1586,19 +1574,7 @@ async function saveSettings(root) {
     status_lyric_max: Number(root.querySelector('#cfg-status-lyric-max').value || 60),
     use_anonimous: root.querySelector('#cfg-anon').checked,
     finish_action: root.querySelector('#cfg-finish').value,
-    weapi_keys: {
-      key1: root.querySelector('#cfg-key1').value.trim(),
-      iv: root.querySelector('#cfg-iv').value.trim(),
-      pub_key: root.querySelector('#cfg-pub').value.trim(),
-      modulus: root.querySelector('#cfg-modulus').value.trim(),
-    },
   };
-  // QQ 凭证：留空表示不修改现有凭证
-  const qqText = root.querySelector('#cfg-qq-credential').value.trim();
-  if (qqText) {
-    try { payload.qq_credential = JSON.parse(qqText); }
-    catch (err) { return toast('QQ 凭证不是合法 JSON', 'error'); }
-  }
   const prevSource = S.cfg.source, prevLevel = S.cfg.level;
   try {
     S.cfg = await api('/api/config', payload);

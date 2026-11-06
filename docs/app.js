@@ -34,7 +34,7 @@ const SVG_PATHS = {
 };
 const FILLED_ICONS = new Set(['play', 'pause', 'prev', 'next']);
 const ICON_IDS = {
-  'btn-download': 'download', 'btn-tasks': 'tasks',
+  'btn-download': 'download',
   'btn-files': 'folder', 'btn-settings': 'gear', 'btn-source': 'user',
   'pl-prev': 'prev', 'pl-next': 'next', 'pl-list': 'list',
   'pw-prev': 'prev', 'pw-next': 'next',
@@ -71,7 +71,7 @@ function sourceLogoUri(source) {
 }
 
 const state = {
-  user: null, meta: null, prefs: null, authEnabled: true, authMode: 'login',
+  user: null, meta: null, prefs: null,
   scope: 'search', source: 'netease', view: 'download', account: null,
   songs: [], title: '', selected: new Set(), keyword: '',
   offset: 0, hasMore: false, loading: false,
@@ -174,7 +174,6 @@ async function api(path, payload, method) {
     throw new Error('网络异常，请稍后重试');
   }
   if (res.status === 401) {
-    if (state.authEnabled) showAuth();
     throw new Error('登录已过期，请重新登录');
   }
   let data;
@@ -207,42 +206,6 @@ function paintIcons() {
   paintPlayButton();
   paintModeButtonPlay();
   paintMuteButton();
-}
-
-/* ==================== 登录 / 注册 ==================== */
-function showAuth() {
-  $('auth-mask').hidden = false;
-}
-
-function hideAuth() {
-  $('auth-mask').hidden = true;
-}
-
-function setAuthTab(mode) {
-  state.authMode = mode;
-  $$('#auth-tabs button').forEach((btn) => btn.classList.toggle('active', btn.dataset.tab === mode));
-  $('auth-confirm-wrap').hidden = mode !== 'register';
-  $('auth-submit').textContent = mode === 'register' ? '注册并登录' : '登录';
-  $('auth-pass').autocomplete = mode === 'register' ? 'new-password' : 'current-password';
-  $('auth-error').textContent = '';
-}
-
-function applyAuthUI() {
-  document.body.classList.toggle('auth-off', !state.authEnabled);
-  $('account-text').textContent = state.user ? state.user.username : (state.authEnabled ? '访客' : '');
-  $('btn-login').hidden = !!state.user;
-  $('btn-logout').hidden = !state.user;
-  updateCloudNote();
-  if (!state.authEnabled && state.scope === 'liked') setScope('search');
-}
-
-/* 音源凭据的存放位置：登录后归到账号，未登录则落在访客空间 */
-function updateCloudNote() {
-  const node = $('account-cloud-note');
-  if (!node) return;
-  node.textContent = state.user
-    ? `音源登录凭据会保存到你的账号（${state.user.username}）下。`
-    : '当前以访客身份使用：音源登录凭据保存在访客空间，换浏览器或清理 Cookie 后可能失效；登录账号后可保存到你的账号下。';
 }
 
 /* 音源账号：顶栏头像、未播放时的默认封面都取自这里（与桌面版一致） */
@@ -294,24 +257,17 @@ async function bootstrap() {
     if (state.appReady) startPolling();
   });
   try {
-    const data = await api('/api/auth/me');
-    state.user = data.user;
-    state.authEnabled = data.auth_enabled !== false;
-    applyAuthUI();
     await enterApp();
   } catch (err) {
-    if (state.authEnabled) showAuth();
-    else toast(err.message, 'error');
+    toast(err.message, 'error');
   }
 }
 
 async function enterApp() {
-  hideAuth();
   try {
     await loadMeta();
   } catch (err) {
     toast(err.message, 'error');
-    if (state.authEnabled) showAuth();
     return;
   }
   state.appReady = true;
@@ -324,9 +280,6 @@ async function loadMeta() {
   state.meta = meta;
   state.prefs = meta.prefs;
   state.source = meta.prefs.source;
-  state.authEnabled = meta.auth_enabled !== false;
-  if (state.user && meta.user) state.user = { id: state.user.id, username: meta.user };
-  applyAuthUI();
   syncPrefs();
   renderQuota();
   updateListStatus();
@@ -814,9 +767,7 @@ async function submitDownload(close, songs) {
       ...options,
     });
     if (typeof close === 'function') close();
-    toast(`任务已创建：${songs.length} 首`, 'ok');
-    openTasks();
-    await refreshTasks(true);
+    toast(`已开始下载：${songs.length} 首`, 'ok');
   } catch (err) {
     toast(err.message, 'error');
   }
@@ -1215,10 +1166,9 @@ function openSongMenu(song, x, y) {
   ], { x, y });
 }
 
-/* ==================== 任务轮询 ==================== */
+/* ==================== 任务轮询（当前页面无任务队列，改为下载即落盘） ==================== */
 function startPolling() {
   stopPolling();
-  state.pollTimer = setTimeout(pollTick, 1200);
 }
 
 function stopPolling() {
@@ -1228,20 +1178,6 @@ function stopPolling() {
 
 async function pollTick() {
   state.pollTimer = null;
-  let failed = false;
-  try {
-    await refreshTasks();
-    state.pollFailures = 0;
-  } catch (err) {
-    /* 服务短暂不可用（如后端重启）时静默退避，恢复后自动回到正常轮询 */
-    failed = true;
-    state.pollFailures = (state.pollFailures || 0) + 1;
-  }
-  const running = state.tasks.some((task) => task.status === 'queued' || task.status === 'running');
-  let delay = running ? 1200 : 4000;
-  if (failed) delay = Math.min(30000, 1500 * Math.pow(2, Math.min(state.pollFailures, 5)));
-  else if (document.hidden) delay = 8000;
-  state.pollTimer = setTimeout(pollTick, delay);
 }
 
 async function refreshTasks(force) {
@@ -1258,7 +1194,7 @@ async function refreshTasks(force) {
   notifyTaskEnds();
   renderTasks(force);
   renderGlobalProgress();
-  const dot = $('btn-tasks').querySelector('.dot');
+  const dot = $('btn-tasks') && $('btn-tasks').querySelector('.dot');
   const active = state.tasks.some((task) => ['queued', 'running', 'paused'].includes(task.status));
   if (dot) dot.hidden = !active;
   if (finishedNow) loadFiles();
@@ -1308,6 +1244,7 @@ function renderTasks(force) {
   if (!force && signature === lastTaskSig) return;
   lastTaskSig = signature;
   const box = $('task-list');
+  if (!box) return;
   $('tasks-count').textContent = state.tasks.length ? `${state.tasks.length} 个任务` : '';
   if (!state.tasks.length) {
     box.className = 'task-list empty';
@@ -1373,6 +1310,7 @@ function renderGlobalProgress() {
 function paintGlobalProgress(ratio, task) {
   const bar = $('global-bar');
   const pctNode = $('global-pct');
+  if (!bar || !pctNode) return;
   bar.style.width = `${Math.max(0, Math.min(1, ratio || 0)) * 100}%`;
   if (!task) {
     pctNode.textContent = '—';
@@ -1463,11 +1401,13 @@ function exportSelected() {
 
 /* ==================== 窗口 ==================== */
 function openTasks() {
+  if (!$('tasks-window')) return;
   $('tasks-window').hidden = false;
   renderTasks(true);
 }
 
 function toggleTasks() {
+  if (!$('tasks-window')) return;
   if ($('tasks-window').hidden) openTasks();
   else $('tasks-window').hidden = true;
 }
@@ -1517,9 +1457,8 @@ function openSettings() {
   $('settings-mask').hidden = false;
   syncPrefs();
   renderQuota();
-  updateCloudNote();
   setSettingsPanel('music');
-  if (state.authEnabled) refreshAccountStates();
+  refreshAccountStates();
 }
 
 function setSettingsPanel(name) {
@@ -1603,11 +1542,7 @@ async function openSourceLogin() {
   });
 
   const note = mask.querySelector('#src-login-note');
-  if (note) {
-    note.textContent = state.user
-      ? '凭据保存到你的账号，换设备登录后可继续使用。'
-      : '当前为访客：凭据保存在访客空间，换浏览器或清理 Cookie 后可能失效。';
-  }
+  if (note) note.textContent = '登录凭据仅保存在当前页面会话中，刷新页面后需重新登录。';
   refreshSourceRows(mask);
   /* 打开音源登录窗口即自动获取当前音源二维码，无需再点一次 */
   startSourceQr(mask, state.source);
@@ -2207,44 +2142,6 @@ async function openQrLogin(source, onDone) {
 
 /* ==================== 事件绑定 ==================== */
 function bind() {
-  /* 登录 */
-  $$('#auth-tabs button').forEach((btn) => {
-    btn.addEventListener('click', () => setAuthTab(btn.dataset.tab));
-  });
-  $('auth-form').addEventListener('submit', async (event) => {
-    event.preventDefault();
-    const username = $('auth-user').value.trim();
-    const password = $('auth-pass').value;
-    const errorNode = $('auth-error');
-    errorNode.textContent = '';
-    if (state.authMode === 'register' && password !== $('auth-confirm').value) {
-      errorNode.textContent = '两次输入的密码不一致';
-      return;
-    }
-    const button = $('auth-submit');
-    button.disabled = true;
-    try {
-      const path = state.authMode === 'register' ? '/api/auth/register' : '/api/auth/login';
-      const data = await api(path, { username, password });
-      state.user = data.user;
-      $('auth-pass').value = '';
-      $('auth-confirm').value = '';
-      await enterApp();
-    } catch (err) {
-      errorNode.textContent = err.message;
-    } finally {
-      button.disabled = false;
-    }
-  });
-  $('btn-login').addEventListener('click', () => { setAuthTab('login'); showAuth(); });
-  $('btn-logout').addEventListener('click', async () => {
-    try { await api('/api/auth/logout', {}); } catch (err) { /* 忽略 */ }
-    stopPolling();
-    state.user = null;
-    // 退出后回到访客身份继续使用，不强制重新登录
-    location.reload();
-  });
-
   /* 查询栏 */
   $$('#scope-group .scope-btn').forEach((btn) => {
     btn.addEventListener('click', () => setScope(btn.dataset.scope));
@@ -2308,7 +2205,6 @@ function bind() {
     if (menuNode) { closeMenu(); return; }
     openDownloadMenu(event.currentTarget);
   });
-  $('btn-tasks').addEventListener('click', toggleTasks);
   $('btn-files').addEventListener('click', openFiles);
   $('btn-settings').addEventListener('click', openSettings);
   $('btn-source').addEventListener('click', openSourceLogin);
@@ -2360,44 +2256,6 @@ function bind() {
     setPlayHint('播放出错，可尝试降低音质后重试');
     state.playing = false;
     paintPlayButton();
-  });
-
-  /* 任务窗口 */
-  $('tasks-close').addEventListener('click', () => { $('tasks-window').hidden = true; });
-  $('task-list').addEventListener('click', async (event) => {
-    const btn = event.target.closest('button[data-act]');
-    if (!btn) return;
-    const card = btn.closest('.task');
-    const id = card.dataset.id;
-    const act = btn.dataset.act;
-    if (act === 'toggle') {
-      if (state.expanded.has(id)) state.expanded.delete(id);
-      else state.expanded.add(id);
-      renderTasks(true);
-      return;
-    }
-    btn.disabled = true;
-    try {
-      if (act === 'cancel') {
-        if (!confirm('取消该下载任务？未完成的部分将被清理。')) return;
-        await api('/api/task/action', { id, action: 'cancel' });
-        toast('已请求取消任务', 'ok');
-      } else if (act === 'delete') {
-        if (!confirm('移除该任务并删除其尚未导出的文件？')) return;
-        await api('/api/task/action', { id, action: 'delete' });
-        toast('任务已移除', 'ok');
-        await loadFiles();
-      } else {
-        await api('/api/task/action', { id, action: act });
-        toast({ pause: '任务已暂停', resume: '任务已继续', retry: '已重新开始任务' }[act] || '操作完成', 'ok');
-      }
-      await refreshTasks(true);
-      renderTasks(true);
-    } catch (err) {
-      toast(err.message, 'error');
-    } finally {
-      btn.disabled = false;
-    }
   });
 
   /* 文件窗口 */
@@ -2529,7 +2387,7 @@ function bind() {
     });
 
   /* 状态栏进度：点击清空 */
-  $('global-pct').addEventListener('click', clearGlobalProgress);
+  if ($('global-pct')) $('global-pct').addEventListener('click', clearGlobalProgress);
 
   /* 快捷键 */
   document.addEventListener('keydown', (event) => {
@@ -2538,7 +2396,7 @@ function bind() {
     hideMenu();
     if (state.queueOpen) { closeQueue(); return; }
     if (!$('player-window').hidden) { closePlayerWindow(); return; }
-    if (!$('tasks-window').hidden) { $('tasks-window').hidden = true; return; }
+    if ($('tasks-window') && !$('tasks-window').hidden) { $('tasks-window').hidden = true; return; }
     if (!$('files-window').hidden) { $('files-window').hidden = true; return; }
     if (!$('settings-mask').hidden) { $('settings-mask').hidden = true; stopLogPoll(); }
   });

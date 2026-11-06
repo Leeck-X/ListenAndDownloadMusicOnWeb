@@ -82,14 +82,10 @@ def save_config(cfg: dict) -> None:
 
 
 def public_config(cfg: dict) -> dict:
-    """导出给前端的安全配置：剔除敏感字段，仅保留是否已配置的布尔位。
-
-    weapi_keys 例外：它是加密密钥而非账号凭证，且设置页需要查看 / 修改，故原样下发。
-    """
+    """导出给前端的安全配置：剔除敏感字段，仅保留是否已配置的布尔位。"""
     public = {key: value for key, value in cfg.items() if key not in SECRET_KEYS}
     public['has_cookie'] = bool(cfg.get('cookie'))
     public['has_qq_credential'] = bool(cfg.get('qq_credential'))
-    public['weapi_keys'] = WEApiKeys.from_config(cfg.get('weapi_keys')).to_dict()
     return public
 
 

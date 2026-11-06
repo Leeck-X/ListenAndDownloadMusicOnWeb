@@ -156,11 +156,11 @@ python server/app.py
 
 ## 配置说明（桌面版）
 
-程序读取同目录下的 `config.json`（即 `web_tk/config.json`），所有配置项均可在 Web 设置页修改，无需手动编辑。
+程序读取同目录下的 `config.json`（即 `web_tk/config.json`），除密钥类字段外，配置项均可在 Web 设置页修改，无需手动编辑。
 
 - **服务配置**：`port`（默认 8756，0 表示自动选择空闲端口）、`log_level`；`host` 固定为 `127.0.0.1`，不可修改
 - **用户配置**：`source`、`level` / `encode_type`、`download_dir`、`name_template`、`folder_structure`、`task_folder`、歌词与标签开关、`workers`、`retry`、`skip_existing`、`finish_action`、`status_lyric` / `status_lyric_max` 等
-- **密钥**：`weapi_keys` 为网易云 weapi 加密接口使用的密钥，可在设置页修改并立即生效；`qq_credential` 为 QQ 音乐登录凭证；`credentials` 为内置 API 凭证留档，当前不参与请求
+- **密钥**：`weapi_keys` 为网易云 weapi 加密接口使用的密钥，仅保存在本地 `config.json`，设置页不再展示或修改，前端接口也不会下发；`qq_credential` 为 QQ 音乐登录凭证，仅由扫码登录写入；`credentials` 为内置 API 凭证留档，当前不参与请求
 
 `config.json` 会保存登录 Cookie 与凭证，已被 `.gitignore` 忽略，请勿提交至公开仓库。
 
